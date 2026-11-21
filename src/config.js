@@ -3,6 +3,7 @@ const {
   DEFAULT_TICKET_PANEL_CHANNEL_ID,
   DEFAULT_TICKET_STAFF_ROLE_IDS,
 } = require("./tickets/constants");
+const { DEFAULT_BLACKLIST_ROLE_ID } = require("./defender/constants");
 
 function parsePositiveNumber(value, fallback) {
   const n = Number(value);
@@ -29,7 +30,10 @@ const config = {
   guildId: process.env.GUILD_ID || "",
 
   // Defender settings
-  quarantineRoleName: (process.env.QUARANTINE_ROLE_NAME || "KARANTINA").trim(),
+  blacklistRoleId: (
+    process.env.BLACKLIST_ROLE_ID || DEFAULT_BLACKLIST_ROLE_ID
+  ).trim(),
+  blacklistRoleName: (process.env.BLACKLIST_ROLE_NAME || "BLACKLIST").trim(),
   defaultLogChannelName: (
     process.env.DEFAULT_LOG_CHANNEL_NAME || "defender-log"
   ).trim(),

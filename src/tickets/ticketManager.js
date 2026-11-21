@@ -1484,6 +1484,147 @@ class TicketManager {
     }
   }
 
+  /**
+   * Recover open ticket channels under DESTEK TALEPLERI across restarts / Railway redeploys
+   * and refresh their top control menu with the latest options (e.g. Talebi Ustlen).
+   */
+  async syncExistingTickets(client) {
+    let synced = 0;
+    const prefixToCat = {};
+    for (const cat of Object.values(TICKET_CATEGORIES)) {
+      prefixToCat[cat.channelPrefix] = cat;
+    }
+
+    for (const guild of client.guilds.cache.values()) {
+      const targetCatName = this.ticketCategoryName.toLowerCase();
+      const parentCat = guild.channels.cache.find(
+        (ch) =>
+          ch.type === ChannelType.GuildCategory &&
+          ch.name.trim().toLowerCase() === targetCatName
+      );
+      if (!parentCat) continue;
+
+      const g = this.store.getGuild(guild.id);
+      const children = [...guild.channels.cache.values()].filter(
+        (ch) => ch.type === ChannelType.GuildText && ch.parentId === parentCat.id
+      );
+
+      for (const ch of children) {
+        const topicMatch = String(ch.topic || "").match(/\[TICKET:#(\d+)\]/);
+        const nameMatch = String(ch.name || "").match(/^([a-z-]+)-(\d+)$/);
+        const ticketNum = topicMatch
+          ? Number(topicMatch[1])
+          : nameMatch
+            ? Number(nameMatch[2])
+            : null;
+        if (!ticketNum) continue;
+
+        if (ticketNum > g.counter) {
+          g.counter = ticketNum;
+        }
+
+        let ticket = this.store.getTicketByChannel(guild.id, ch.id);
+        if (ticket) {
+          await this._refreshControlMessage(ch, ticket);
+          synced += 1;
+          continue;
+        }
+
+        // Recover ticket metadata from pinned/first bot control message (e.g. after Railway container reset)
+        let controlMsg = null;
+        if (ch.messages?.fetchPinned) {
+          const pinned = await ch.messages.fetchPinned().catch(() => null);
+          if (pinned) {
+            for (const m of pinned.values()) {
+              if (m.author?.id === client.user?.id && m.embeds?.length > 0) {
+                controlMsg = m;
+                break;
+              }
+            }
+          }
+        }
+        if (!controlMsg && ch.messages?.fetch) {
+          const msgs = await ch.messages.fetch({ limit: 20 }).catch(() => null);
+          if (msgs) {
+            const arr = [...msgs.values()].reverse();
+            controlMsg =
+              arr.find(
+                (m) => m.author?.id === client.user?.id && m.embeds?.length > 0
+              ) || null;
+          }
+        }
+        if (!controlMsg) continue;
+
+        const embed = controlMsg.embeds[0];
+        const fields = embed.fields || embed.data?.fields || [];
+        const getField = (name) =>
+          fields.find((f) => f.name === name)?.value || "";
+
+        const prefix = nameMatch ? nameMatch[1] : "";
+        const matchedCat =
+          prefixToCat[prefix] ||
+          Object.values(TICKET_CATEGORIES).find(
+            (c) => c.label === getField("Kategori")
+          ) ||
+          TICKET_CATEGORIES.sorun;
+
+        const openerVal = getField("Talebi Açan");
+        const openerIdMatch = openerVal.match(/<@(\d+)>/);
+        const formIdVal = getField("Form Discord User ID").replace(/`/g, "").trim();
+        const claimVal = getField("Üstlenen Yetkili");
+        const claimMatch = claimVal.match(/<@(\d+)>/);
+        const statusVal = getField("Durum");
+
+        let status = "open";
+        if (statusVal.startsWith("Kapalı")) status = "closed";
+        else if (statusVal.startsWith("Askıya")) status = "on_hold";
+        else if (statusVal.startsWith("Çözüldü")) status = "resolved";
+
+        const rawDesc = String(embed.description ?? embed.data?.description ?? "");
+        const descClean = rawDesc
+          .replace(/^\*\*Sorun \/ Talep Açıklaması:\*\*\n?/, "")
+          .split("\n\n**Anonim DM Köprüsü:**")[0]
+          .trim();
+
+        ticket = {
+          number: ticketNum,
+          guildId: guild.id,
+          channelId: ch.id,
+          channelName: ch.name,
+          categoryId: matchedCat.id,
+          categoryLabel: matchedCat.label,
+          anonymous: Boolean(matchedCat.anonymous),
+          visibility: matchedCat.anonymous ? "management_all" : null,
+          openerId: openerIdMatch ? openerIdMatch[1] : formIdVal || "",
+          openerTag: openerIdMatch ? openerIdMatch[1] : "Bilinmeyen",
+          formDiscordUserId: formIdVal || (openerIdMatch ? openerIdMatch[1] : ""),
+          issueDescription: descClean || "Talep içeriği",
+          reportedUsername: getField("Şikayet Edilen Kişi") || null,
+          status,
+          escalated: statusVal.includes("Yönetime Aktarıldı"),
+          claimedById: claimMatch ? claimMatch[1] : null,
+          claimedByTag: null,
+          claimedAt: claimMatch ? Date.now() : null,
+          awaitingStaffSince:
+            claimMatch && status === "open" ? Date.now() : null,
+          lastClaimedStaffReplyAt: null,
+          reminderSentAt: null,
+          controlMessageId: controlMsg.id,
+          createdAt: controlMsg.createdTimestamp || Date.now(),
+          updatedAt: Date.now(),
+        };
+
+        this.store.saveTicket(guild.id, ticket);
+        await this._refreshControlMessage(ch, ticket);
+        synced += 1;
+      }
+
+      this.store.save();
+    }
+
+    return synced;
+  }
+
   handleChannelDelete(channel) {
     if (!channel?.guild) return;
     this.store.deleteTicket(channel.guild.id, channel.id);

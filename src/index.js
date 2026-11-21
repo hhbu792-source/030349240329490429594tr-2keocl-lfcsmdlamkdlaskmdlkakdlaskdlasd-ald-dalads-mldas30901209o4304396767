@@ -110,6 +110,12 @@ client.once(Events.ClientReady, async (readyClient) => {
         `[TICKET] Destek Merkezi paneli hazir (kanal: ${config.ticketPanelChannelId}, mesaj: ${panelMsg.id}).`
       );
     }
+    const syncedTickets = await ticketManager.syncExistingTickets(readyClient);
+    if (syncedTickets > 0) {
+      console.log(
+        `[TICKET] ${syncedTickets} mevcut talep kanali senkronize edildi ve menuleri guncellendi.`
+      );
+    }
     ticketManager.startReminderLoop(readyClient);
   } catch (err) {
     console.error("[TICKET] Destek paneli yuklenemedi:", err.message);

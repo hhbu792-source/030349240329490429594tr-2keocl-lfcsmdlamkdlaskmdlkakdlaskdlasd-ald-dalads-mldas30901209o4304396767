@@ -218,6 +218,17 @@ async function runTicketTests() {
       "THE COMPLEX destek merkezine hoş geldiniz."
     )
   );
+  assert.strictEqual(
+    panelMsg1.embeds[0].data.description.includes("**Kurallar**"),
+    false
+  );
+  assert.strictEqual(
+    panelMsg1.embeds[0].data.description.includes("Kimse var mı?"),
+    false
+  );
+  assert(
+    panelMsg1.embeds[0].data.description.includes("Blacklist Kaldırma")
+  );
   assert.strictEqual(panelMsg1.components[0].components[0].data.label, "Destek Aç");
   assert.strictEqual(panelMsg1.components[0].components[0].data.custom_id, "ticket:open");
 
@@ -242,10 +253,11 @@ async function runTicketTests() {
   assert(replyPayload);
   const catOptions = replyPayload.components[0].components[0].options;
   assert.strictEqual(catOptions.length, Object.keys(TICKET_CATEGORIES).length);
-  assert.strictEqual(catOptions.length, 11);
+  assert.strictEqual(catOptions.length, 12);
   assert(catOptions.some((o) => o.data.value === "oneri_itirazi"));
   assert(catOptions.some((o) => o.data.value === "bug_raporu"));
   assert(catOptions.some((o) => o.data.value === "yonetim_sikayet"));
+  assert(catOptions.some((o) => o.data.value === "blacklist_kaldirma"));
 
   // Selecting Text RP -> opens Modal with exact 3 fields (Discord User ID, Sorun, Opsiyonel sikayet edilen)
   let shownModal = null;
@@ -713,7 +725,65 @@ async function runTicketTests() {
     reportedUsername: "yonetici_a",
   });
   assert.strictEqual(ys.channel.name, "yonetim-sikayet-8");
-  console.log("[OK] Yeni kategoriler: oneri-6, bug-7 ve yonetim-sikayet-8 dogrulandi.");
+
+  // 8. Blacklist Kaldirma category: custom 3-field modal (ID, Blacklist Alma Sebebi, Blacklist Kaldirma Istegi Sebebi)
+  let blModal = null;
+  await manager.handleInteraction({
+    customId: "ticket:select_category",
+    values: ["blacklist_kaldirma"],
+    user: env.playerUser,
+    isButton: () => false,
+    isStringSelectMenu: () => true,
+    isModalSubmit: () => false,
+    async showModal(m) {
+      blModal = m;
+    },
+  });
+  assert(blModal);
+  const blFields = blModal.components.map((r) => r.components[0].data);
+  assert.strictEqual(blFields.length, 3);
+  assert.strictEqual(blFields[0].custom_id, "discord_user_id");
+  assert.strictEqual(blFields[0].required, true);
+  assert.strictEqual(blFields[1].custom_id, "blacklist_reason");
+  assert.strictEqual(blFields[1].required, true);
+  assert.strictEqual(blFields[2].custom_id, "blacklist_appeal_reason");
+  assert.strictEqual(blFields[2].required, true);
+
+  let blEditReply = null;
+  await manager.handleInteraction({
+    customId: "ticket:modal:blacklist_kaldirma:default",
+    guild: env.guild,
+    client: env.client,
+    user: env.playerUser,
+    isButton: () => false,
+    isStringSelectMenu: () => false,
+    isModalSubmit: () => true,
+    fields: {
+      getTextInputValue(k) {
+        if (k === "discord_user_id") return env.playerUser.id;
+        if (k === "blacklist_reason") return "Kural ihlali nedeniyle aldim.";
+        if (k === "blacklist_appeal_reason") return "Hatami anladim, tekrarlamayacagim.";
+        throw new Error(`Unexpected field: ${k}`);
+      },
+    },
+    async deferReply() {},
+    async editReply(msg) {
+      blEditReply = msg;
+    },
+  });
+  assert(blEditReply && blEditReply.includes("#9"));
+  const blCh = env.guild.channels.cache.find((c) => c.name === "blacklist-9");
+  assert(blCh);
+  const blEmbedData = blCh._sent[0].embeds[0].data;
+  assert(blEmbedData.description.includes("Blacklist Alma Sebebi"));
+  assert(blEmbedData.description.includes("Kural ihlali nedeniyle aldim."));
+  assert(blEmbedData.description.includes("Blacklist Kaldırma İsteği Sebebi"));
+  assert(blEmbedData.description.includes("Hatami anladim"));
+  assert.strictEqual(
+    blEmbedData.fields.some((f) => f.name === "Şikayet Edilen Kişi"),
+    false
+  );
+  console.log("[OK] Yeni kategoriler + Blacklist Kaldirma ozel formu (blacklist-9) ve Kurallar kaldirimi dogrulandi.");
 
   console.log("\nTUM TICKET TESTLERI BASARIYLA GECTI.");
 }

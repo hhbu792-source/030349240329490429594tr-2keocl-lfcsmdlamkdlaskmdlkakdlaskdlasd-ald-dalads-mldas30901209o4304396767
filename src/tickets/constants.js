@@ -29,17 +29,11 @@ const PANEL_DESCRIPTION = [
   "📂 Öneri İtirazı · Eğer öneriniz askıya alınmış veya reddedilmiş ise bunun hakkında itiraz etmek için bu kategoriden talep açın",
   "🛠️ Bug Raporu · Discord içi bir bug tespit eder iseniz bu kategoriden feedback verin",
   "🧐 Yönetim Şikayet · Herhangi bir yönetim üyesinden şikayetçi iseniz lütfen bu kategoriden talep açın",
-  "",
-  "**Kurallar**",
-  "• Her konu için tek talep açın, aynı konuyu tekrar açmayın.",
-  '• "Selam", "Kimse var mı?" yerine doğrudan sorununuzu yazın.',
-  "• Kanıt gereken durumlarda ekran görüntüsü veya mesaj bağlantısı ekleyin.",
-  "• Saygı çerçevesinde iletişim kurun; troll ve alakasız talepler yaptırım alır.",
-  "• Yetkilileri gereksiz yere etiketlemeyin, sıra size gelecektir.",
+  "🚫 Blacklist Kaldırma · Blacklist cezanızın kaldırılması için itiraz ve başvuru talebi",
 ].join("\n");
 
 /**
- * All 8 ticket categories with exact channel prefixes & access tiers.
+ * All 12 ticket categories with exact channel prefixes & access tiers.
  */
 const TICKET_CATEGORIES = {
   text_rp: {
@@ -129,6 +123,15 @@ const TICKET_CATEGORIES = {
     channelPrefix: "yonetim-sikayet",
     accessTier: "management",
     anonymous: false,
+  },
+  blacklist_kaldirma: {
+    id: "blacklist_kaldirma",
+    label: "Blacklist Kaldırma",
+    description: "Blacklist cezanızın kaldırılması için başvuru talebi",
+    channelPrefix: "blacklist",
+    accessTier: "staff",
+    anonymous: false,
+    customForm: "blacklist",
   },
 };
 

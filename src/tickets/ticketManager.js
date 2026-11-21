@@ -228,6 +228,33 @@ class TicketManager {
       .setPlaceholder(`Örn: ${userId || "123456789012345678"}`)
       .setMaxLength(32);
 
+    if (cat.customForm === "blacklist") {
+      const blacklistReasonInput = new TextInputBuilder()
+        .setCustomId("blacklist_reason")
+        .setLabel("Blacklist Alma Sebebiniz")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setPlaceholder("Neden blacklist aldığınızı açık şekilde yazın.")
+        .setMaxLength(1000);
+
+      const blacklistAppealInput = new TextInputBuilder()
+        .setCustomId("blacklist_appeal_reason")
+        .setLabel("Blacklist Kaldırma İsteği Sebebiniz")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setPlaceholder(
+          "Blacklist cezanızın neden kaldırılmasını istediğinizi açıklayın."
+        )
+        .setMaxLength(1500);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(userIdInput),
+        new ActionRowBuilder().addComponents(blacklistReasonInput),
+        new ActionRowBuilder().addComponents(blacklistAppealInput)
+      );
+      return modal;
+    }
+
     const issueInput = new TextInputBuilder()
       .setCustomId("issue_description")
       .setLabel("Sorununuz / Talebiniz")
@@ -317,10 +344,20 @@ class TicketManager {
       });
     }
 
-    const descLines = [
-      "**Sorun / Talep Açıklaması:**",
-      truncate(ticket.issueDescription, 2000),
-    ];
+    const descLines =
+      ticket.categoryId === "blacklist_kaldirma" &&
+      (ticket.blacklistReason || ticket.blacklistAppealReason)
+        ? [
+            "**Blacklist Alma Sebebi:**",
+            truncate(ticket.blacklistReason || "-", 1200),
+            "",
+            "**Blacklist Kaldırma İsteği Sebebi:**",
+            truncate(ticket.blacklistAppealReason || "-", 1500),
+          ]
+        : [
+            "**Sorun / Talep Açıklaması:**",
+            truncate(ticket.issueDescription, 2000),
+          ];
 
     if (ticket.anonymous) {
       descLines.push(
@@ -553,8 +590,10 @@ class TicketManager {
     categoryId,
     visibilityId = null,
     formDiscordUserId,
-    issueDescription,
+    issueDescription = "",
     reportedUsername = "",
+    blacklistReason = "",
+    blacklistAppealReason = "",
   }) {
     const category = TICKET_CATEGORIES[categoryId];
     if (!category) {
@@ -591,6 +630,14 @@ class TicketManager {
 
     this.snapshotManager?.markSelfAction(`channel:${channel.id}`, 10_000);
 
+    const cleanBlReason = String(blacklistReason || "").trim();
+    const cleanBlAppeal = String(blacklistAppealReason || "").trim();
+    const effectiveIssue =
+      String(issueDescription || "").trim() ||
+      (cleanBlReason || cleanBlAppeal
+        ? `Blacklist Alma Sebebi: ${cleanBlReason}\nBlacklist Kaldırma İsteği Sebebi: ${cleanBlAppeal}`
+        : "");
+
     const ticket = {
       number: ticketNumber,
       guildId: guild.id,
@@ -603,8 +650,10 @@ class TicketManager {
       openerId: openerUser.id,
       openerTag: openerUser.tag || openerUser.username,
       formDiscordUserId: String(formDiscordUserId || "").trim(),
-      issueDescription: String(issueDescription || "").trim(),
+      issueDescription: effectiveIssue,
       reportedUsername: String(reportedUsername || "").trim() || null,
+      blacklistReason: cleanBlReason || null,
+      blacklistAppealReason: cleanBlAppeal || null,
       status: "open",
       escalated: false,
       claimedById: null,
@@ -1088,10 +1137,28 @@ class TicketManager {
       const parts = cid.split(":");
       const categoryId = parts[2];
       const visibilityId = parts[3] === "default" ? null : parts[3];
+      const cat = TICKET_CATEGORIES[categoryId];
 
-      const formDiscordUserId = interaction.fields.getTextInputValue("discord_user_id");
-      const issueDescription = interaction.fields.getTextInputValue("issue_description");
-      const reportedUsername = interaction.fields.getTextInputValue("reported_username") || "";
+      const formDiscordUserId =
+        interaction.fields.getTextInputValue("discord_user_id");
+
+      let issueDescription = "";
+      let reportedUsername = "";
+      let blacklistReason = "";
+      let blacklistAppealReason = "";
+
+      if (cat?.customForm === "blacklist") {
+        blacklistReason =
+          interaction.fields.getTextInputValue("blacklist_reason");
+        blacklistAppealReason = interaction.fields.getTextInputValue(
+          "blacklist_appeal_reason"
+        );
+      } else {
+        issueDescription =
+          interaction.fields.getTextInputValue("issue_description");
+        reportedUsername =
+          interaction.fields.getTextInputValue("reported_username") || "";
+      }
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -1104,6 +1171,8 @@ class TicketManager {
         formDiscordUserId,
         issueDescription,
         reportedUsername,
+        blacklistReason,
+        blacklistAppealReason,
       });
 
       if (res.ticket.anonymous) {

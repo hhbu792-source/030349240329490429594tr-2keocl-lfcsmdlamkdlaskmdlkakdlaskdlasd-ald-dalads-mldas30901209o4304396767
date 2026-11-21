@@ -1,0 +1,19 @@
+{
+  "name": "defender-ticket-bot",
+  "version": "1.0.0",
+  "description": "THE COMPLEX - Gelismis Defender (Guard) Sistemi + Menu Tabanli Ticket & Anonim DM Destek Botu",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "node src/deployCommands.js",
+    "test": "node tests/runTests.js && node tests/runTicketTests.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.4.7"
+  }
+}

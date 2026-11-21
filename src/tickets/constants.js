@@ -26,6 +26,9 @@ const PANEL_DESCRIPTION = [
   "📨 Yönetim İletişim · Yönetime doğrudan ulaş: öneri, iş birliği ve özel konular. Yalnız yönetim ve üst yönetim görür",
   "🚩 Normal Yetkili Şikayet · Bir yetkiliyi adınla şikayet et. Yalnız yönetim ve üst yönetim görür",
   "🕵️ Anonim Şikayet · Yönetim üyesi şikayeti. Kimliğini yalnız sunucu sahibi görür, kimin göreceğini sen seçersin",
+  "📂 Öneri İtirazı · Eğer öneriniz askıya alınmış veya reddedilmiş ise bunun hakkında itiraz etmek için bu kategoriden talep açın",
+  "🛠️ Bug Raporu · Discord içi bir bug tespit eder iseniz bu kategoriden feedback verin",
+  "🧐 Yönetim Şikayet · Herhangi bir yönetim üyesinden şikayetçi iseniz lütfen bu kategoriden talep açın",
   "",
   "**Kurallar**",
   "• Her konu için tek talep açın, aynı konuyu tekrar açmayın.",
@@ -103,6 +106,30 @@ const TICKET_CATEGORIES = {
     accessTier: "anonymous",
     anonymous: true,
   },
+  oneri_itirazi: {
+    id: "oneri_itirazi",
+    label: "Öneri İtirazı",
+    description: "Askıya alınmış veya reddedilmiş öneriniz hakkında itiraz talebi",
+    channelPrefix: "oneri",
+    accessTier: "staff",
+    anonymous: false,
+  },
+  bug_raporu: {
+    id: "bug_raporu",
+    label: "Bug Raporu",
+    description: "Discord içi bir bug tespit ederseniz bu kategoriden bildirin",
+    channelPrefix: "bug",
+    accessTier: "staff",
+    anonymous: false,
+  },
+  yonetim_sikayet: {
+    id: "yonetim_sikayet",
+    label: "Yönetim Şikayet",
+    description: "Herhangi bir yönetim üyesinden şikayetçi iseniz bu kategoriden açın",
+    channelPrefix: "yonetim-sikayet",
+    accessTier: "management",
+    anonymous: false,
+  },
 };
 
 const ANONYMOUS_VISIBILITY_OPTIONS = {
@@ -138,6 +165,16 @@ const TICKET_STATUS_COLORS = {
 };
 
 const ADMIN_MENU_ACTIONS = [
+  {
+    value: "claim",
+    label: "Talebi Üstlen",
+    description: "Talebi kendi üzerinize alırsınız (12 saat yanıt takibi başlar)",
+  },
+  {
+    value: "unclaim",
+    label: "Üstlenmeyi Bırak",
+    description: "Talebin üstlenmesini bırakır, başka yetkili alabilir",
+  },
   {
     value: "escalate",
     label: "Talebi Yönetime Aktar",

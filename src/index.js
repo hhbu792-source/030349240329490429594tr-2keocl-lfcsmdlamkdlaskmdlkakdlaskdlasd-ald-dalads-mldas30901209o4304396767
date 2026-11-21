@@ -33,6 +33,7 @@ const ticketManager = new TicketManager({
   staffRoleIds: config.ticketStaffRoleIds,
   managementRoleIds: config.ticketManagementRoleIds,
   upperManagementRoleIds: config.ticketUpperManagementRoleIds,
+  claimReminderMs: config.ticketClaimReminderMs,
   snapshotManager: defender.snapshotManager,
 });
 
@@ -109,6 +110,7 @@ client.once(Events.ClientReady, async (readyClient) => {
         `[TICKET] Destek Merkezi paneli hazir (kanal: ${config.ticketPanelChannelId}, mesaj: ${panelMsg.id}).`
       );
     }
+    ticketManager.startReminderLoop(readyClient);
   } catch (err) {
     console.error("[TICKET] Destek paneli yuklenemedi:", err.message);
   }
@@ -197,7 +199,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const lines = list.slice(-20).map((t) => {
           const st = TICKET_STATUS_LABELS[t.status] || t.status;
           const openerTxt = t.anonymous ? "Anonim" : `<@${t.openerId}>`;
-          return `- **#${t.number}** <#${t.channelId}> | ${t.categoryLabel} | **${st}** | ${openerTxt}`;
+          const claimTxt = t.claimedById ? ` | Üstlenen: <@${t.claimedById}>` : "";
+          return `- **#${t.number}** <#${t.channelId}> | ${t.categoryLabel} | **${st}** | ${openerTxt}${claimTxt}`;
         });
 
         const embed = new EmbedBuilder()
@@ -698,6 +701,7 @@ client.on(Events.ChannelDelete, (channel) => {
 
 function handleShutdown(signal) {
   console.log(`[DEFENDER] ${signal} alindi, kapatiliyor...`);
+  ticketManager.stopReminderLoop();
   defender.shutdown();
   client.destroy();
   process.exit(0);

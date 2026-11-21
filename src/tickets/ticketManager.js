@@ -54,11 +54,26 @@ class TicketManager {
         ? [...options.upperManagementRoleIds]
         : [];
     this.deleteDelayMs = options.deleteDelayMs ?? 5000;
+    this.claimReminderMs = options.claimReminderMs ?? 12 * 60 * 60 * 1000;
+    this.reminderCheckIntervalMs =
+      options.reminderCheckIntervalMs ?? 60 * 1000;
     this.snapshotManager = options.snapshotManager || null;
     this.logger = options.logger || console;
 
     /** Map<dmMessageId, { guildId: string, channelId: string }> */
     this.anonDmIndex = new Map();
+    this._reminderTimer = null;
+  }
+
+  isAdminMember(guild, member, permissions) {
+    if (!guild) return false;
+    const userId = member?.id || member?.user?.id;
+    if (userId && guild.ownerId === userId) return true;
+    if (permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
+    if (member?.permissions?.has?.(PermissionFlagsBits.Administrator)) {
+      return true;
+    }
+    return false;
   }
 
   isStaffMember(guild, member, permissions) {
@@ -252,6 +267,13 @@ class TicketManager {
         value: ticket.escalated
           ? `${statusLabel} (Yönetime Aktarıldı)`
           : statusLabel,
+        inline: true,
+      },
+      {
+        name: "Üstlenen Yetkili",
+        value: ticket.claimedById
+          ? `<@${ticket.claimedById}>`
+          : "Henüz üstlenilmedi",
         inline: true,
       },
     ];
@@ -585,6 +607,12 @@ class TicketManager {
       reportedUsername: String(reportedUsername || "").trim() || null,
       status: "open",
       escalated: false,
+      claimedById: null,
+      claimedByTag: null,
+      claimedAt: null,
+      awaitingStaffSince: null,
+      lastClaimedStaffReplyAt: null,
+      reminderSentAt: null,
       controlMessageId: null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -642,7 +670,15 @@ class TicketManager {
       .catch(() => {});
   }
 
-  async executeAdminAction({ guild, client, channel, actorMember, actorUser, action }) {
+  async executeAdminAction({
+    guild,
+    client,
+    channel,
+    actorMember,
+    actorUser,
+    actorPermissions,
+    action,
+  }) {
     const ticket = this.store.getTicketByChannel(guild.id, channel.id);
     if (!ticket) {
       return { ok: false, reason: "NOT_A_TICKET" };
@@ -654,6 +690,94 @@ class TicketManager {
       accessTier: "staff",
     };
     const actorTag = actorMember?.displayName || actorUser.username || "Yetkili";
+    const actorIsAdmin = this.isAdminMember(
+      guild,
+      actorMember,
+      actorPermissions
+    );
+
+    if (action === "claim") {
+      if (ticket.status === "closed" || ticket.status === "resolved") {
+        return { ok: false, reason: "TICKET_NOT_OPEN", ticket };
+      }
+      if (ticket.claimedById === actorUser.id) {
+        return { ok: false, reason: "ALREADY_CLAIMED_BY_YOU", ticket };
+      }
+      if (ticket.claimedById && !actorIsAdmin) {
+        return {
+          ok: false,
+          reason: "ALREADY_CLAIMED",
+          claimedById: ticket.claimedById,
+          ticket,
+        };
+      }
+
+      const prevClaimer = ticket.claimedById;
+      const now = Date.now();
+      ticket.claimedById = actorUser.id;
+      ticket.claimedByTag = actorTag;
+      ticket.claimedAt = now;
+      ticket.awaitingStaffSince = ticket.status === "open" ? now : null;
+      ticket.reminderSentAt = null;
+      ticket.updatedAt = now;
+      this.store.saveTicket(guild.id, ticket);
+
+      await this._refreshControlMessage(channel, ticket);
+
+      const hours = Math.round((this.claimReminderMs / (60 * 60 * 1000)) * 10) / 10;
+      const claimDesc = prevClaimer
+        ? `Talep #${ticket.number}, <@${prevClaimer}> yetkilisinden devralınarak <@${actorUser.id}> tarafından üstlenildi. ${hours} saat içinde yanıt verilmezse bot otomatik hatırlatma etiketi atacaktır.`
+        : `Talep #${ticket.number}, <@${actorUser.id}> tarafından üstlenildi. ${hours} saat içinde yanıt verilmezse bot otomatik hatırlatma etiketi atacaktır.`;
+
+      await channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x2ecc71)
+            .setDescription(claimDesc),
+        ],
+        allowedMentions: { users: [actorUser.id] },
+      });
+
+      return { ok: true, action, ticket };
+    }
+
+    if (action === "unclaim") {
+      if (!ticket.claimedById) {
+        return { ok: false, reason: "NOT_CLAIMED", ticket };
+      }
+      if (ticket.claimedById !== actorUser.id && !actorIsAdmin) {
+        return {
+          ok: false,
+          reason: "NOT_CLAIM_OWNER",
+          claimedById: ticket.claimedById,
+          ticket,
+        };
+      }
+
+      const prevClaimer = ticket.claimedById;
+      ticket.claimedById = null;
+      ticket.claimedByTag = null;
+      ticket.claimedAt = null;
+      ticket.awaitingStaffSince = null;
+      ticket.lastClaimedStaffReplyAt = null;
+      ticket.reminderSentAt = null;
+      ticket.updatedAt = Date.now();
+      this.store.saveTicket(guild.id, ticket);
+
+      await this._refreshControlMessage(channel, ticket);
+      await channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x95a5a6)
+            .setDescription(
+              `Talep #${ticket.number} üstlenmesi bırakıldı (önceki yetkili: <@${prevClaimer}>). Başka bir yetkili talebi üstlenebilir.`
+            ),
+        ],
+        allowedMentions: { parse: [] },
+      });
+
+      return { ok: true, action, ticket };
+    }
 
     if (action === "escalate") {
       ticket.escalated = true;
@@ -698,6 +822,8 @@ class TicketManager {
 
     if (action === "close") {
       ticket.status = "closed";
+      ticket.awaitingStaffSince = null;
+      ticket.reminderSentAt = null;
       ticket.updatedAt = Date.now();
       this.store.saveTicket(guild.id, ticket);
 
@@ -734,6 +860,8 @@ class TicketManager {
 
     if (action === "hold") {
       ticket.status = "on_hold";
+      ticket.awaitingStaffSince = null;
+      ticket.reminderSentAt = null;
       ticket.updatedAt = Date.now();
       this.store.saveTicket(guild.id, ticket);
 
@@ -769,8 +897,13 @@ class TicketManager {
     }
 
     if (action === "reopen") {
+      const now = Date.now();
       ticket.status = "open";
-      ticket.updatedAt = Date.now();
+      if (ticket.claimedById) {
+        ticket.awaitingStaffSince = now;
+        ticket.reminderSentAt = null;
+      }
+      ticket.updatedAt = now;
       this.store.saveTicket(guild.id, ticket);
 
       if (!ticket.anonymous && channel.permissionOverwrites?.edit) {
@@ -813,6 +946,8 @@ class TicketManager {
 
     if (action === "resolve") {
       ticket.status = "resolved";
+      ticket.awaitingStaffSince = null;
+      ticket.reminderSentAt = null;
       ticket.updatedAt = Date.now();
       this.store.saveTicket(guild.id, ticket);
 
@@ -1014,15 +1149,28 @@ class TicketManager {
         channel: interaction.channel,
         actorMember: interaction.member,
         actorUser: interaction.user,
+        actorPermissions: interaction.memberPermissions,
         action,
       });
 
       if (!res.ok) {
-        await interaction.editReply("Bu kanal aktif bir destek talebi değil.");
+        const errMessages = {
+          NOT_A_TICKET: "Bu kanal aktif bir destek talebi değil.",
+          TICKET_NOT_OPEN: "Kapalı veya çözülmüş bir talep üstlenilemez.",
+          ALREADY_CLAIMED_BY_YOU: "Bu talep zaten sizin üzerinizde.",
+          ALREADY_CLAIMED: `Bu talep şu an <@${res.claimedById}> tarafından üstlenilmiş.`,
+          NOT_CLAIMED: "Bu talep henüz hiçbir yetkili tarafından üstlenilmemiş.",
+          NOT_CLAIM_OWNER: `Bu talebin üstlenmesini yalnızca <@${res.claimedById}> veya bir yönetici bırakabilir.`,
+        };
+        await interaction.editReply(
+          errMessages[res.reason] || "İşlem uygulanamadı."
+        );
         return true;
       }
 
       const doneLabels = {
+        claim: `Talep #${res.ticket.number} üzerinize alındı.`,
+        unclaim: `Talep #${res.ticket.number} üstlenmesi bırakıldı.`,
         escalate: `Talep #${res.ticket.number} yönetime aktarıldı.`,
         close: `Talep #${res.ticket.number} kapatıldı ve kullanıcıya DM gönderildi.`,
         hold: `Talep #${res.ticket.number} askıya alındı.`,
@@ -1077,9 +1225,29 @@ class TicketManager {
     return false;
   }
 
+  _markClaimedStaffReplied(guildId, ticket) {
+    const now = Date.now();
+    ticket.awaitingStaffSince = null;
+    ticket.lastClaimedStaffReplyAt = now;
+    ticket.reminderSentAt = null;
+    ticket.updatedAt = now;
+    this.store.saveTicket(guildId, ticket);
+  }
+
+  _markOpenerAwaitingStaff(guildId, ticket) {
+    if (!ticket.claimedById || ticket.status !== "open") return;
+    if (ticket.awaitingStaffSince) return;
+    const now = Date.now();
+    ticket.awaitingStaffSince = now;
+    ticket.reminderSentAt = null;
+    ticket.updatedAt = now;
+    this.store.saveTicket(guildId, ticket);
+  }
+
   /**
-   * Forward admin messages typed inside `anonim-<numara>` anonymously to the player via DM.
-   * Prefixing a message with `//` treats it as an internal staff note (not forwarded).
+   * Tracks 12-hour claim response clock on ALL ticket channels,
+   * and forwards admin messages inside `anonim-<numara>` anonymously to the player via DM.
+   * Prefixing a message with `//` inside `anonim-<numara>` treats it as an internal staff note.
    */
   async handleGuildMessage(message, client) {
     if (!message || !message.guild || message.author?.bot) return false;
@@ -1088,7 +1256,7 @@ class TicketManager {
       message.guild.id,
       message.channel.id
     );
-    if (!ticket || !ticket.anonymous) return false;
+    if (!ticket) return false;
 
     const rawContent = (message.content || "").trim();
     const attachmentUrls = message.attachments?.size
@@ -1097,11 +1265,27 @@ class TicketManager {
 
     if (!rawContent && attachmentUrls.length === 0) return false;
 
-    // Internal staff note prefix: `// ...` is not sent to player
+    // Standard ticket channel: track 12h claim response clock
+    if (!ticket.anonymous) {
+      if (ticket.status === "open") {
+        if (ticket.claimedById && message.author.id === ticket.claimedById) {
+          this._markClaimedStaffReplied(message.guild.id, ticket);
+        } else if (message.author.id === ticket.openerId) {
+          this._markOpenerAwaitingStaff(message.guild.id, ticket);
+        }
+      }
+      return false;
+    }
+
+    // Internal staff note prefix: `// ...` is not sent to player and does not count as a reply
     if (rawContent.startsWith("//")) return true;
 
     if (ticket.status !== "open") {
       return true;
+    }
+
+    if (ticket.claimedById && message.author.id === ticket.claimedById) {
+      this._markClaimedStaffReplied(message.guild.id, ticket);
     }
 
     const bodyParts = [];
@@ -1213,10 +1397,91 @@ class TicketManager {
       allowedMentions: { parse: [] },
     });
 
+    this._markOpenerAwaitingStaff(ticket.guildId, ticket);
+
     await message
       .reply(`Mesajınız Anonim Talep #${ticket.number} üzerinden yönetime iletildi.`)
       .catch(() => {});
     return true;
+  }
+
+  /**
+   * Checks all open claimed tickets and pings the claiming staff member
+   * if they have not replied within `claimReminderMs` (default: 12 hours).
+   */
+  async checkClaimReminders(client, now = Date.now()) {
+    let remindedCount = 0;
+    const hoursLabel =
+      Math.round((this.claimReminderMs / (60 * 60 * 1000)) * 10) / 10;
+
+    for (const [guildId, g] of Object.entries(this.store.guilds)) {
+      for (const ticket of Object.values(g.tickets)) {
+        if (ticket.status !== "open") continue;
+        if (!ticket.claimedById || !ticket.awaitingStaffSince) continue;
+
+        const baseTs = ticket.reminderSentAt || ticket.awaitingStaffSince;
+        if (now - baseTs < this.claimReminderMs) continue;
+
+        let channel = client.channels?.cache?.get(ticket.channelId);
+        if (!channel && typeof client.channels?.fetch === "function") {
+          channel = await client.channels
+            .fetch(ticket.channelId)
+            .catch(() => null);
+        }
+        if (!channel || typeof channel.send !== "function") continue;
+
+        const reminderEmbed = new EmbedBuilder()
+          .setColor(0xe67e22)
+          .setTitle(`Cevap Hatırlatması - Talep #${ticket.number}`)
+          .setDescription(
+            `<@${ticket.claimedById}>, üstlendiğiniz **#${ticket.number}** numaralı destek talebine **${hoursLabel} saattir** yanıt verilmedi. Lütfen taleple ilgilenin veya ilgilenemiyorsanız yönetim menüsünden **Üstlenmeyi Bırak** seçeneğini kullanın.`
+          )
+          .setFooter({ text: `THE COMPLEX Destek Merkezi | Talep #${ticket.number}` })
+          .setTimestamp(now);
+
+        const sent = await channel
+          .send({
+            content: `<@${ticket.claimedById}>`,
+            embeds: [reminderEmbed],
+            allowedMentions: { users: [ticket.claimedById] },
+          })
+          .catch(() => null);
+
+        if (sent) {
+          ticket.reminderSentAt = now;
+          ticket.updatedAt = now;
+          this.store.saveTicket(guildId, ticket);
+          remindedCount += 1;
+        }
+      }
+    }
+
+    return { remindedCount };
+  }
+
+  startReminderLoop(client) {
+    this.stopReminderLoop();
+    // Run an immediate check on startup to catch any overdue tickets across restarts
+    this.checkClaimReminders(client).catch((err) => {
+      this.logger.warn("[TICKET REMINDER] Kontrol hatasi:", err.message);
+    });
+
+    this._reminderTimer = setInterval(() => {
+      this.checkClaimReminders(client).catch((err) => {
+        this.logger.warn("[TICKET REMINDER] Kontrol hatasi:", err.message);
+      });
+    }, this.reminderCheckIntervalMs);
+
+    if (typeof this._reminderTimer.unref === "function") {
+      this._reminderTimer.unref();
+    }
+  }
+
+  stopReminderLoop() {
+    if (this._reminderTimer) {
+      clearInterval(this._reminderTimer);
+      this._reminderTimer = null;
+    }
   }
 
   handleChannelDelete(channel) {

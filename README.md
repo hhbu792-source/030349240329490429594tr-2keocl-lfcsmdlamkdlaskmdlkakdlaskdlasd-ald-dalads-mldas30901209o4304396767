@@ -58,7 +58,7 @@ Sunucu koruma (Guard) odaklı, çok katmanlı **Defender Sistemi**.
 ## THE COMPLEX Destek Merkezi (Ticket Sistemi)
 
 - **Destek Aç Panel Kanalı:** `1573522477655654544` (bot açıldığında paneli otomatik gönderir/günceller, `/ticket panel` ile de manuel yenilenebilir).
-- **8 Kategori + Özel Kanal Şablonları:**
+- **11 Kategori + Özel Kanal Şablonları:**
   - `Text RP` -> `trp-<numara>`
   - `Discord` -> `dc-<numara>`
   - `Teknik Destek` -> `teknik-<numara>`
@@ -67,9 +67,12 @@ Sunucu koruma (Guard) odaklı, çok katmanlı **Defender Sistemi**.
   - `Yönetim İletişim` -> `yonetim-<numara>`
   - `Normal Yetkili Şikayet` -> `staff-<numara>`
   - `Anonim Şikayet` -> `anonim-<numara>` (görünürlük seçimi + çift yönlü DM köprüsü)
+  - `Öneri İtirazı` -> `oneri-<numara>`
+  - `Bug Raporu` -> `bug-<numara>`
+  - `Yönetim Şikayet` -> `yonetim-sikayet-<numara>`
 - **3 Alanlı Form:** Discord User ID (zorunlu), Sorun/Talep (zorunlu), Şikayet Edilen Kişi Kullanıcı Adı (opsiyonel).
 - **Erişim Rolleri:** `1573521722697719970`, `1573521638241345726`, `1573521538479816784`, `1573521880147820594`.
-- **Kanal Üstü Sabit Yönetim Menüsü:** Yönetime Aktar, Kapat, Askıya Al, Geri Aç, Çözüldü İşaretle, Sil (+ kullanıcıya DM bildirimi).
+- **Kanal Üstü Sabit Yönetim Menüsü:** Talebi Üstlen (12 saat içinde cevap vermezse bot otomatik etiketler), Üstlenmeyi Bırak, Yönetime Aktar, Kapat, Askıya Al, Geri Aç, Çözüldü İşaretle, Sil (+ kullanıcıya DM bildirimi).
 
 | Ticket Komutu | Açıklama |
 | --- | --- |

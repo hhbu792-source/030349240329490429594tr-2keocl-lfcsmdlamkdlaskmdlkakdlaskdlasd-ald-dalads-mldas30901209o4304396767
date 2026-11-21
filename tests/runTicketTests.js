@@ -242,7 +242,10 @@ async function runTicketTests() {
   assert(replyPayload);
   const catOptions = replyPayload.components[0].components[0].options;
   assert.strictEqual(catOptions.length, Object.keys(TICKET_CATEGORIES).length);
-  assert.strictEqual(catOptions.length, 8);
+  assert.strictEqual(catOptions.length, 11);
+  assert(catOptions.some((o) => o.data.value === "oneri_itirazi"));
+  assert(catOptions.some((o) => o.data.value === "bug_raporu"));
+  assert(catOptions.some((o) => o.data.value === "yonetim_sikayet"));
 
   // Selecting Text RP -> opens Modal with exact 3 fields (Discord User ID, Sorun, Opsiyonel sikayet edilen)
   let shownModal = null;
@@ -549,6 +552,169 @@ async function runTicketTests() {
   assert(closedReplies[0].includes("Kapalı"));
 
   console.log("[OK] Anonim Sikayet (anonim-5): Cift yonlu DM koprusu, sahip-ozel kimlik ve kapatma bildirimi dogrulandi.");
+
+  // 6. Ticket Claim + 12-Hour Auto-Ping Reminder System (on dc-2)
+  const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+  const staff2User = createUser("staff-102", "YetkiliEce");
+  const staff2Member = {
+    id: staff2User.id,
+    displayName: "Yetkili Ece",
+    user: staff2User,
+    roles: { cache: env.staffMember.roles.cache },
+    permissions: { has: () => false },
+  };
+
+  // Staff 1 claims dc-2
+  const claimRes = await manager.executeAdminAction({
+    guild: env.guild,
+    client: env.client,
+    channel: dc.channel,
+    actorMember: env.staffMember,
+    actorUser: env.staffUser,
+    action: "claim",
+  });
+  assert.strictEqual(claimRes.ok, true);
+  assert.strictEqual(dc.ticket.claimedById, env.staffUser.id);
+  assert(dc.ticket.awaitingStaffSince > 0);
+  // Top embed reflects claimed staff
+  const claimedEmbedFields = dc.controlMsg.embeds[0].data.fields;
+  const claimField = claimedEmbedFields.find((f) => f.name === "Üstlenen Yetkili");
+  assert(claimField && claimField.value.includes(`<@${env.staffUser.id}>`));
+
+  // Same staff trying to claim again -> ALREADY_CLAIMED_BY_YOU
+  const dupClaim = await manager.executeAdminAction({
+    guild: env.guild,
+    client: env.client,
+    channel: dc.channel,
+    actorMember: env.staffMember,
+    actorUser: env.staffUser,
+    action: "claim",
+  });
+  assert.strictEqual(dupClaim.ok, false);
+  assert.strictEqual(dupClaim.reason, "ALREADY_CLAIMED_BY_YOU");
+
+  // Another non-admin staff trying to claim -> ALREADY_CLAIMED
+  const stealClaim = await manager.executeAdminAction({
+    guild: env.guild,
+    client: env.client,
+    channel: dc.channel,
+    actorMember: staff2Member,
+    actorUser: staff2User,
+    action: "claim",
+  });
+  assert.strictEqual(stealClaim.ok, false);
+  assert.strictEqual(stealClaim.reason, "ALREADY_CLAIMED");
+
+  // 11 hours elapsed -> NO reminder yet
+  const t0 = dc.ticket.awaitingStaffSince;
+  const rem11h = await manager.checkClaimReminders(
+    env.client,
+    t0 + 11 * 60 * 60 * 1000
+  );
+  assert.strictEqual(rem11h.remindedCount, 0);
+
+  // 12 hours + 1 min elapsed without staff replying -> bot PINGS <@staff-101>!
+  const beforePingLen = dc.channel._sent.length;
+  const rem12h = await manager.checkClaimReminders(
+    env.client,
+    t0 + TWELVE_HOURS_MS + 60_000
+  );
+  assert.strictEqual(rem12h.remindedCount, 1);
+  assert.strictEqual(dc.channel._sent.length, beforePingLen + 1);
+  const pingMsg = dc.channel._sent[dc.channel._sent.length - 1];
+  assert.strictEqual(pingMsg.content, `<@${env.staffUser.id}>`);
+  assert(pingMsg.embeds[0].data.description.includes("12 saattir"));
+
+  // Checking again 5 minutes later -> NO duplicate spam!
+  const remDup = await manager.checkClaimReminders(
+    env.client,
+    t0 + TWELVE_HOURS_MS + 6 * 60_000
+  );
+  assert.strictEqual(remDup.remindedCount, 0);
+
+  // Claimed staff replies in dc-2 -> clock clears, NO reminder even 30 hours later while waiting for player!
+  await manager.handleGuildMessage(
+    {
+      guild: env.guild,
+      channel: dc.channel,
+      author: env.staffUser,
+      content: "Merhaba, rolunuzu hemen kontrol ediyorum.",
+      attachments: new Map(),
+    },
+    env.client
+  );
+  assert.strictEqual(dc.ticket.awaitingStaffSince, null);
+  const remAfterReply = await manager.checkClaimReminders(
+    env.client,
+    Date.now() + 30 * 60 * 60 * 1000
+  );
+  assert.strictEqual(remAfterReply.remindedCount, 0);
+
+  // Player sends a new message in dc-2 -> 12h clock starts again -> ping after 12h!
+  await manager.handleGuildMessage(
+    {
+      guild: env.guild,
+      channel: dc.channel,
+      author: env.playerUser,
+      content: "Tesekkurler, hala gelmedi kontrol edebilir misiniz?",
+      attachments: new Map(),
+    },
+    env.client
+  );
+  assert(dc.ticket.awaitingStaffSince > 0);
+  const remSecondWave = await manager.checkClaimReminders(
+    env.client,
+    dc.ticket.awaitingStaffSince + TWELVE_HOURS_MS + 1000
+  );
+  assert.strictEqual(remSecondWave.remindedCount, 1);
+
+  // Unclaim clears claimedById and prevents further reminders
+  const unclaimRes = await manager.executeAdminAction({
+    guild: env.guild,
+    client: env.client,
+    channel: dc.channel,
+    actorMember: env.staffMember,
+    actorUser: env.staffUser,
+    action: "unclaim",
+  });
+  assert.strictEqual(unclaimRes.ok, true);
+  assert.strictEqual(dc.ticket.claimedById, null);
+  assert.strictEqual(dc.ticket.awaitingStaffSince, null);
+  console.log("[OK] Talebi Ustlenme & 12 saat hatirlatici: Ustlenme, cevap sifirlama, 12 saatte etiket ve birakma dogrulandi.");
+
+  // 7. New categories: Oneri Itirazi, Bug Raporu, Yonetim Sikayet
+  const oneri = await manager.createTicketFromSubmission({
+    guild: env.guild,
+    client: env.client,
+    openerUser: env.playerUser,
+    categoryId: "oneri_itirazi",
+    formDiscordUserId: env.playerUser.id,
+    issueDescription: "Reddedilen onerime itiraz ediyorum.",
+  });
+  assert.strictEqual(oneri.channel.name, "oneri-6");
+
+  const bug = await manager.createTicketFromSubmission({
+    guild: env.guild,
+    client: env.client,
+    openerUser: env.playerUser,
+    categoryId: "bug_raporu",
+    formDiscordUserId: env.playerUser.id,
+    issueDescription: "Rol verme komutu hata veriyor.",
+  });
+  assert.strictEqual(bug.channel.name, "bug-7");
+
+  const ys = await manager.createTicketFromSubmission({
+    guild: env.guild,
+    client: env.client,
+    openerUser: env.playerUser,
+    categoryId: "yonetim_sikayet",
+    formDiscordUserId: env.playerUser.id,
+    issueDescription: "Yonetim uyesinden sikayetciyim.",
+    reportedUsername: "yonetici_a",
+  });
+  assert.strictEqual(ys.channel.name, "yonetim-sikayet-8");
+  console.log("[OK] Yeni kategoriler: oneri-6, bug-7 ve yonetim-sikayet-8 dogrulandi.");
+
   console.log("\nTUM TICKET TESTLERI BASARIYLA GECTI.");
 }
 

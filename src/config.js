@@ -54,10 +54,17 @@ const config = {
     process.env.TICKET_UPPER_MANAGEMENT_ROLE_IDS,
     []
   ),
+  ticketClaimReminderHours: parsePositiveNumber(
+    process.env.TICKET_CLAIM_REMINDER_HOURS,
+    12
+  ),
 };
 
 config.snapshotIntervalMs = Math.round(
   config.snapshotIntervalMinutes * 60 * 1000
+);
+config.ticketClaimReminderMs = Math.round(
+  config.ticketClaimReminderHours * 60 * 60 * 1000
 );
 
 module.exports = config;

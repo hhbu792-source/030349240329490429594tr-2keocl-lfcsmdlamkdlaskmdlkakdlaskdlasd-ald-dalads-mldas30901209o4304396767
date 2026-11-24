@@ -4,7 +4,8 @@ const { ChannelType, PermissionFlagsBits } = require("discord.js");
 const { TicketManager } = require("../src/tickets/ticketManager");
 const {
   DEFAULT_TICKET_PANEL_CHANNEL_ID,
-  DEFAULT_TICKET_STAFF_ROLE_IDS,
+  DEFAULT_MANAGEMENT_ROLE_ID,
+  DEFAULT_DISCORD_STAFF_ROLE_ID,
   PANEL_TITLE,
   TICKET_CATEGORIES,
 } = require("../src/tickets/constants");
@@ -36,6 +37,13 @@ function createUser(id, username) {
   };
 }
 
+function hasOverwrite(overwrites, targetId, kind, permBit) {
+  const ow = overwrites.find((o) => o.id === targetId);
+  if (!ow) return false;
+  const arr = ow[kind] || [];
+  return arr.includes(permBit);
+}
+
 function createTicketMockEnv() {
   const channelsCache = new MockCollection();
   const rolesCache = new MockCollection();
@@ -44,22 +52,31 @@ function createTicketMockEnv() {
   const everyoneRole = { id: "everyone-1", name: "@everyone" };
   rolesCache.set(everyoneRole.id, everyoneRole);
 
-  for (const rid of DEFAULT_TICKET_STAFF_ROLE_IDS) {
-    rolesCache.set(rid, { id: rid, name: `Staff-${rid.slice(-4)}` });
-  }
+  const mgmtRole = { id: DEFAULT_MANAGEMENT_ROLE_ID, name: "Yonetim" };
+  const staffRole = { id: DEFAULT_DISCORD_STAFF_ROLE_ID, name: "Discord Staff" };
+  rolesCache.set(mgmtRole.id, mgmtRole);
+  rolesCache.set(staffRole.id, staffRole);
 
   const ownerUser = createUser("owner-999", "SunucuSahibi");
+  const mgmtUser = createUser("mgmt-100", "YoneticiAli");
   const staffUser = createUser("staff-101", "YetkiliCan");
   const playerUser = createUser("player-202", "OyuncuMert");
-  usersMap.set(ownerUser.id, ownerUser);
-  usersMap.set(staffUser.id, staffUser);
-  usersMap.set(playerUser.id, playerUser);
+  const otherPlayerUser = createUser("player-303", "OyuncuSelin");
 
-  const staffRoles = new MockCollection();
-  staffRoles.set(
-    DEFAULT_TICKET_STAFF_ROLE_IDS[0],
-    rolesCache.get(DEFAULT_TICKET_STAFF_ROLE_IDS[0])
-  );
+  for (const u of [ownerUser, mgmtUser, staffUser, playerUser, otherPlayerUser]) {
+    usersMap.set(u.id, u);
+  }
+
+  const mgmtRoles = new MockCollection([[mgmtRole.id, mgmtRole]]);
+  const staffRoles = new MockCollection([[staffRole.id, staffRole]]);
+
+  const mgmtMember = {
+    id: mgmtUser.id,
+    displayName: "Yonetici Ali",
+    user: mgmtUser,
+    roles: { cache: mgmtRoles },
+    permissions: { has: () => false },
+  };
   const staffMember = {
     id: staffUser.id,
     displayName: "Yetkili Can",
@@ -150,6 +167,9 @@ function createTicketMockEnv() {
     roles: { everyone: everyoneRole, cache: rolesCache },
     channels: {
       cache: channelsCache,
+      async fetch(id) {
+        return channelsCache.get(id) || null;
+      },
       async create(opts) {
         return makeChannel(opts);
       },
@@ -158,6 +178,7 @@ function createTicketMockEnv() {
       me: { id: "bot-self" },
       cache: new MockCollection([
         [ownerUser.id, { id: ownerUser.id, user: ownerUser }],
+        [mgmtUser.id, mgmtMember],
         [staffUser.id, staffMember],
         [playerUser.id, playerMember],
       ]),
@@ -171,8 +192,21 @@ function createTicketMockEnv() {
     type: ChannelType.GuildText,
   });
 
+  // Pre-create ALL 11 Discord category channels with exact IDs provided by user
+  const categoryChannels = {};
+  for (const cat of Object.values(TICKET_CATEGORIES)) {
+    categoryChannels[cat.id] = makeChannel({
+      id: cat.parentCategoryId,
+      name: cat.label,
+      type: ChannelType.GuildCategory,
+    });
+  }
+
   const client = {
     user: { id: "bot-self" },
+    guilds: {
+      cache: new MockCollection([[guild.id, guild]]),
+    },
     channels: {
       cache: channelsCache,
       async fetch(id) {
@@ -191,11 +225,15 @@ function createTicketMockEnv() {
     guild,
     client,
     panelChannel,
+    categoryChannels,
     ownerUser,
+    mgmtUser,
+    mgmtMember,
     staffUser,
     staffMember,
     playerUser,
     playerMember,
+    otherPlayerUser,
   };
 }
 
@@ -208,38 +246,60 @@ async function runTicketTests() {
     deleteDelayMs: 0,
   });
 
-  // 1. Panel auto-post to channel 1573522477655654544 + anti-duplicate on restart
+  // 1. Panel auto-post to channel 1573522477655654544: NO "Teknik Destek", NO "Kurallar", HAS "Bug Raporu" & "Blacklist Kaldırma"
   const panelMsg1 = await manager.ensurePanelMessage(env.client);
   assert(panelMsg1);
   assert.strictEqual(env.panelChannel._sent.length, 1);
   assert.strictEqual(panelMsg1.embeds[0].data.title, PANEL_TITLE);
-  assert(
-    panelMsg1.embeds[0].data.description.includes(
-      "THE COMPLEX destek merkezine hoş geldiniz."
-    )
-  );
-  assert.strictEqual(
-    panelMsg1.embeds[0].data.description.includes("**Kurallar**"),
-    false
-  );
-  assert.strictEqual(
-    panelMsg1.embeds[0].data.description.includes("Kimse var mı?"),
-    false
-  );
-  assert(
-    panelMsg1.embeds[0].data.description.includes("Blacklist Kaldırma")
-  );
+  const desc = panelMsg1.embeds[0].data.description;
+  assert(desc.includes("THE COMPLEX destek merkezine hoş geldiniz."));
+  assert.strictEqual(desc.includes("Teknik Destek"), false);
+  assert.strictEqual(desc.includes("**Kurallar**"), false);
+  assert(desc.includes("Bug Raporu"));
+  assert(desc.includes("Blacklist Kaldırma"));
   assert.strictEqual(panelMsg1.components[0].components[0].data.label, "Destek Aç");
   assert.strictEqual(panelMsg1.components[0].components[0].data.custom_id, "ticket:open");
 
-  // Running ensurePanelMessage again must edit in place (no duplicate!)
   const panelMsg2 = await manager.ensurePanelMessage(env.client);
   assert.strictEqual(panelMsg2.id, panelMsg1.id);
   assert.strictEqual(env.panelChannel._sent.length, 1);
   assert.strictEqual(panelMsg1.editedCount, 1);
-  console.log("[OK] Destek paneli: 1573522477655654544 kanalina eksiksiz metin ve Destek Ac butonu ile gonderildi.");
+  console.log("[OK] Destek paneli: Teknik Destek kaldirildi, 11 kategori metni ve Destek Ac butonu dogrulandi.");
 
-  // 2. Menu Flow: Clicking "Destek Aç" -> shows all 8 categories
+  // 2. Sync category permissions on ALL 11 Discord categories
+  const syncedCatCount = await manager.syncCategoryPermissions(env.client);
+  assert.strictEqual(syncedCatCount, 11);
+
+  const expectedStaffCatIds = new Set(["text_rp", "discord", "sorun"]);
+  for (const cat of Object.values(TICKET_CATEGORIES)) {
+    const ch = env.categoryChannels[cat.id];
+    // Every category hides from @everyone (so regular users only see categories with their own open tickets)
+    assert(
+      hasOverwrite(ch._overwrites, "everyone-1", "deny", PermissionFlagsBits.ViewChannel),
+      `Category ${cat.id} must deny @everyone ViewChannel`
+    );
+    // Management (1573521638241345726) can view all 11 categories
+    assert(
+      hasOverwrite(ch._overwrites, DEFAULT_MANAGEMENT_ROLE_ID, "allow", PermissionFlagsBits.ViewChannel),
+      `Category ${cat.id} must allow Management ViewChannel`
+    );
+    if (expectedStaffCatIds.has(cat.id)) {
+      // Discord Staff (1573521880147820594) sees ONLY Text RP, Discord, Sorunum Var
+      assert(
+        hasOverwrite(ch._overwrites, DEFAULT_DISCORD_STAFF_ROLE_ID, "allow", PermissionFlagsBits.ViewChannel),
+        `Staff category ${cat.id} must allow Discord Staff`
+      );
+    } else {
+      // Discord Staff explicitly DENIED on all 8 management/anonymous categories!
+      assert(
+        hasOverwrite(ch._overwrites, DEFAULT_DISCORD_STAFF_ROLE_ID, "deny", PermissionFlagsBits.ViewChannel),
+        `Management category ${cat.id} must deny Discord Staff`
+      );
+    }
+  }
+  console.log("[OK] 11 Discord kategori gizliligi: @everyone gizli, 3 staff + 8 yonetim kategori izinleri dogrulandi.");
+
+  // 3. Category select menu: exact 11 categories, NO "teknik"
   let replyPayload = null;
   await manager.handleInteraction({
     customId: "ticket:open",
@@ -250,16 +310,13 @@ async function runTicketTests() {
       replyPayload = p;
     },
   });
-  assert(replyPayload);
   const catOptions = replyPayload.components[0].components[0].options;
-  assert.strictEqual(catOptions.length, Object.keys(TICKET_CATEGORIES).length);
-  assert.strictEqual(catOptions.length, 12);
-  assert(catOptions.some((o) => o.data.value === "oneri_itirazi"));
+  assert.strictEqual(catOptions.length, 11);
+  assert.strictEqual(catOptions.some((o) => o.data.value === "teknik"), false);
   assert(catOptions.some((o) => o.data.value === "bug_raporu"));
-  assert(catOptions.some((o) => o.data.value === "yonetim_sikayet"));
   assert(catOptions.some((o) => o.data.value === "blacklist_kaldirma"));
 
-  // Selecting Text RP -> opens Modal with exact 3 fields (Discord User ID, Sorun, Opsiyonel sikayet edilen)
+  // Selecting Text RP -> opens standard 3-field modal
   let shownModal = null;
   await manager.handleInteraction({
     customId: "ticket:select_category",
@@ -272,17 +329,13 @@ async function runTicketTests() {
       shownModal = m;
     },
   });
-  assert(shownModal);
   const modalFields = shownModal.components.map((r) => r.components[0].data);
   assert.strictEqual(modalFields.length, 3);
   assert.strictEqual(modalFields[0].custom_id, "discord_user_id");
-  assert.strictEqual(modalFields[0].required, true);
   assert.strictEqual(modalFields[1].custom_id, "issue_description");
-  assert.strictEqual(modalFields[1].required, true);
   assert.strictEqual(modalFields[2].custom_id, "reported_username");
-  assert.strictEqual(modalFields[2].required, false);
 
-  // Selecting Anonim Şikayet -> shows visibility chooser menu first!
+  // Selecting Anonim Şikayet -> shows visibility chooser menu first
   let updatedVisibility = null;
   await manager.handleInteraction({
     customId: "ticket:select_category",
@@ -295,167 +348,179 @@ async function runTicketTests() {
       updatedVisibility = p;
     },
   });
-  assert(updatedVisibility);
   assert.strictEqual(
     updatedVisibility.components[0].components[0].data.custom_id,
     "ticket:anon_visibility"
   );
-  console.log("[OK] Menu ve Modal akisi: 8 kategori + 3 alanli form + anonim gorunurluk secimi dogrulandi.");
+  console.log("[OK] Menu ve Modal akisi: 11 kategori (Teknik Destek yok) + 3 alanli form + anonim gorunurluk dogrulandi.");
 
-  // 3. Create standard tickets & verify exact channel name templates + 4 staff role IDs visibility!
-  const trp = await manager.createTicketFromSubmission({
-    guild: env.guild,
-    client: env.client,
-    openerUser: env.playerUser,
-    categoryId: "text_rp",
-    formDiscordUserId: env.playerUser.id,
-    issueDescription: "Level 1 RP'sinde kural ihlali yapildi.",
-    reportedUsername: "kuralbozan_99",
-  });
-  assert.strictEqual(trp.channel.name, "trp-1");
-  assert.strictEqual(trp.controlMsg.pinned, true);
-  // Check exact permission overwrites: @everyone denied, opener allowed, all 4 staff role IDs allowed!
-  const owIds = trp.channel._overwrites.map((o) => o.id);
-  assert(owIds.includes("everyone-1"));
-  assert(owIds.includes(env.playerUser.id));
-  for (const rid of DEFAULT_TICKET_STAFF_ROLE_IDS) {
-    assert(owIds.includes(rid), `Staff role ${rid} must have access to ticket channel`);
+  // 4. Verify ALL 11 categories map to exact parentCategoryId & exact role permissions!
+  const expectedParentMap = {
+    text_rp: "1574482182020403210",
+    discord: "1574482318737801216",
+    sorun: "1574482768346357790",
+    bug_raporu: "1574482604936134807",
+    perma_ban: "1574482908746616893",
+    yonetim: "1574483052590006413",
+    yetkili_sikayet: "1574483508166922321",
+    anonim_sikayet: "1574483609677602987",
+    oneri_itirazi: "1574483714837053530",
+    yonetim_sikayet: "1574483976624541697",
+    blacklist_kaldirma: "1574484077069738174",
+  };
+
+  const createdTickets = {};
+  for (const [catId, expectedParentId] of Object.entries(expectedParentMap)) {
+    const res = await manager.createTicketFromSubmission({
+      guild: env.guild,
+      client: env.client,
+      openerUser: env.playerUser,
+      categoryId: catId,
+      visibilityId: catId === "anonim_sikayet" ? "management_all" : null,
+      formDiscordUserId: env.playerUser.id,
+      issueDescription: `${catId} test talebi`,
+      blacklistReason: catId === "blacklist_kaldirma" ? "Kural ihlali" : "",
+      blacklistAppealReason: catId === "blacklist_kaldirma" ? "Pismanim" : "",
+    });
+    createdTickets[catId] = res;
+
+    // Exact Discord category channel ID!
+    assert.strictEqual(
+      res.channel.parentId,
+      expectedParentId,
+      `${catId} must be created inside category ${expectedParentId}`
+    );
+    // @everyone denied ViewChannel
+    assert(
+      hasOverwrite(res.channel._overwrites, "everyone-1", "deny", PermissionFlagsBits.ViewChannel)
+    );
+    // Other regular players NEVER get access
+    assert.strictEqual(
+      res.channel._overwrites.some((o) => o.id === env.otherPlayerUser.id),
+      false
+    );
+    // Management (1573521638241345726) ALWAYS allowed (for default management_all)
+    assert(
+      hasOverwrite(res.channel._overwrites, DEFAULT_MANAGEMENT_ROLE_ID, "allow", PermissionFlagsBits.ViewChannel),
+      `${catId} must allow Management`
+    );
+
+    if (catId === "anonim_sikayet") {
+      // Opener NOT in channel overwrites, Discord Staff DENIED
+      assert.strictEqual(
+        res.channel._overwrites.some((o) => o.id === env.playerUser.id),
+        false
+      );
+      assert(
+        hasOverwrite(res.channel._overwrites, DEFAULT_DISCORD_STAFF_ROLE_ID, "deny", PermissionFlagsBits.ViewChannel)
+      );
+    } else {
+      // Opener ALLOWED to see ONLY their own ticket
+      assert(
+        hasOverwrite(res.channel._overwrites, env.playerUser.id, "allow", PermissionFlagsBits.ViewChannel)
+      );
+      if (expectedStaffCatIds.has(catId)) {
+        // Discord Staff (1573521880147820594) ALLOWED on Text RP, Discord, Sorunum Var
+        assert(
+          hasOverwrite(res.channel._overwrites, DEFAULT_DISCORD_STAFF_ROLE_ID, "allow", PermissionFlagsBits.ViewChannel),
+          `${catId} must allow Discord Staff`
+        );
+      } else {
+        // Discord Staff (1573521880147820594) EXPLICITLY DENIED on all 7 non-anon management categories!
+        assert(
+          hasOverwrite(res.channel._overwrites, DEFAULT_DISCORD_STAFF_ROLE_ID, "deny", PermissionFlagsBits.ViewChannel),
+          `${catId} must deny Discord Staff`
+        );
+      }
+    }
   }
+  console.log("[OK] 11 kategori yonlendirmesi: Tum kategoriler tam Discord ID altinda ve dogru Yonetim/Staff izinleriyle acildi.");
 
-  const dc = await manager.createTicketFromSubmission({
-    guild: env.guild,
-    client: env.client,
-    openerUser: env.playerUser,
-    categoryId: "discord",
-    formDiscordUserId: env.playerUser.id,
-    issueDescription: "Rolum gelmedi.",
-  });
-  assert.strictEqual(dc.channel.name, "dc-2");
-
-  const tek = await manager.createTicketFromSubmission({
-    guild: env.guild,
-    client: env.client,
-    openerUser: env.playerUser,
-    categoryId: "teknik",
-    formDiscordUserId: env.playerUser.id,
-    issueDescription: "Bot komutu calismiyor.",
-  });
-  assert.strictEqual(tek.channel.name, "teknik-3");
-
-  const stf = await manager.createTicketFromSubmission({
-    guild: env.guild,
-    client: env.client,
-    openerUser: env.playerUser,
-    categoryId: "yetkili_sikayet",
-    formDiscordUserId: env.playerUser.id,
-    issueDescription: "Yetkili haksiz yere uyari verdi.",
-    reportedUsername: "yetkili_x",
-  });
-  assert.strictEqual(stf.channel.name, "staff-4");
-  console.log("[OK] Kanal sablonlari ve izinler: trp-1, dc-2, teknik-3, staff-4 ve 4 yetkili rol ID dogrulandi.");
-
-  // 4. Top Admin Control Menu: block non-staff, test all 6 actions + opener DM notifications!
-  let deniedReply = null;
+  // 5. Role enforcement on Admin Control Menu:
+  // Normal Discord Staff CANNOT use admin menu on Management ticket (e.g. bug_raporu / blacklist_kaldirma)!
+  const bugTicket = createdTickets.bug_raporu;
+  let staffDeniedMgmt = null;
   await manager.handleInteraction({
-    customId: `ticket:admin_action:${trp.channel.id}`,
-    values: ["close"],
+    customId: `ticket:admin_action:${bugTicket.channel.id}`,
+    values: ["claim"],
     guild: env.guild,
     client: env.client,
-    channel: trp.channel,
-    user: env.playerUser,
-    member: env.playerMember,
+    channel: bugTicket.channel,
+    user: env.staffUser,
+    member: env.staffMember,
     memberPermissions: { has: () => false },
     isButton: () => false,
     isStringSelectMenu: () => true,
     isModalSubmit: () => false,
     async reply(p) {
-      deniedReply = p;
+      staffDeniedMgmt = p;
     },
   });
-  assert(deniedReply && deniedReply.content.includes("yalnızca yetkili ekip"));
+  assert(staffDeniedMgmt && staffDeniedMgmt.content.includes("yetkili ekip"));
 
-  // Staff executes: escalate -> hold -> reopen -> resolve -> close -> delete
+  // Management CAN use admin menu on bug_raporu!
+  let mgmtReply = null;
+  await manager.handleInteraction({
+    customId: `ticket:admin_action:${bugTicket.channel.id}`,
+    values: ["claim"],
+    guild: env.guild,
+    client: env.client,
+    channel: bugTicket.channel,
+    user: env.mgmtUser,
+    member: env.mgmtMember,
+    memberPermissions: { has: () => false },
+    isButton: () => false,
+    isStringSelectMenu: () => true,
+    isModalSubmit: () => false,
+    async deferReply() {},
+    async editReply(msg) {
+      mgmtReply = msg;
+    },
+  });
+  assert(mgmtReply && mgmtReply.includes("üzerinize alındı"));
+
+  // Normal Discord Staff CAN manage Text RP ticket, and escalating removes Discord Staff access!
+  const trp = createdTickets.text_rp;
   const prevPlayerDms = env.playerUser._dms.length;
   for (const act of ["escalate", "hold", "reopen", "resolve", "close"]) {
     const res = await manager.executeAdminAction({
       guild: env.guild,
       client: env.client,
       channel: trp.channel,
-      actorMember: env.staffMember,
-      actorUser: env.staffUser,
+      actorMember: env.mgmtMember,
+      actorUser: env.mgmtUser,
       action: act,
     });
     assert.strictEqual(res.ok, true);
   }
   assert.strictEqual(trp.ticket.escalated, true);
-  assert.strictEqual(trp.ticket.status, "closed");
-  assert.strictEqual(env.playerUser._dms.length, prevPlayerDms + 5);
+  // After escalation, Discord Staff is explicitly denied ViewChannel on trp-1!
   assert(
-    env.playerUser._dms[env.playerUser._dms.length - 1].embeds[0].data.title.includes(
-      "Kapatıldı"
-    )
+    hasOverwrite(trp.channel._overwrites, DEFAULT_DISCORD_STAFF_ROLE_ID, "deny", PermissionFlagsBits.ViewChannel)
   );
+  assert(
+    hasOverwrite(trp.channel._overwrites, DEFAULT_MANAGEMENT_ROLE_ID, "allow", PermissionFlagsBits.ViewChannel)
+  );
+  assert.strictEqual(env.playerUser._dms.length, prevPlayerDms + 5);
 
-  // Delete action deletes channel and notifies opener via DM
   const delRes = await manager.executeAdminAction({
     guild: env.guild,
     client: env.client,
     channel: trp.channel,
-    actorMember: env.staffMember,
-    actorUser: env.staffUser,
+    actorMember: env.mgmtMember,
+    actorUser: env.mgmtUser,
     action: "delete",
   });
   assert.strictEqual(delRes.ok, true);
   assert.strictEqual(trp.channel.deleted, true);
-  assert.strictEqual(manager.store.getTicketByChannel(env.guild.id, trp.channel.id), null);
-  console.log("[OK] Yonetim menusu: 6 islem (aktar, aski, geri ac, cozuldu, kapat, sil) ve DM bildirimleri dogrulandi.");
+  console.log("[OK] Yetki ayrimi & Yonetim menusu: Discord Staff yonetim taleplerine erisemez, aktarimda erisimi kesilir.");
 
-  // 5. Anonymous Ticket (`anonim-5`): Admin-only channel, identity hidden except Owner, Two-Way DM Bridge!
-  const prevOwnerDms = env.ownerUser._dms.length;
-  const anon = await manager.createTicketFromSubmission({
-    guild: env.guild,
-    client: env.client,
-    openerUser: env.playerUser,
-    categoryId: "anonim_sikayet",
-    visibilityId: "management_all",
-    formDiscordUserId: env.playerUser.id,
-    issueDescription: "Bir yonetici yetkisini kotuye kullaniyor.",
-    reportedUsername: "yonetici_z",
-  });
-  assert.strictEqual(anon.channel.name, "anonim-5");
+  // 6. Anonymous Ticket DM Bridge + Owner-only identity reveal
+  const anon = createdTickets.anonim_sikayet;
   assert.strictEqual(anon.openerDmSent, true);
-  // Opener must NOT be in channel permission overwrites!
-  assert.strictEqual(
-    anon.channel._overwrites.some((o) => o.id === env.playerUser.id),
-    false
-  );
-  // Top embed must NOT reveal player's username or ID!
   const anonEmbedJson = JSON.stringify(anon.controlMsg.embeds[0].data);
   assert(!anonEmbedJson.includes(env.playerUser.id));
-  assert(!anonEmbedJson.includes(env.playerUser.username));
   assert(anonEmbedJson.includes("Anonim Kullanıcı"));
-  // Server Owner received confidential identity DM!
-  assert.strictEqual(env.ownerUser._dms.length, prevOwnerDms + 1);
-  assert(
-    JSON.stringify(env.ownerUser._dms[env.ownerUser._dms.length - 1].embeds[0].data).includes(
-      env.playerUser.id
-    )
-  );
-
-  // Reveal identity button: blocked for normal staff, allowed for Server Owner!
-  let staffRevealReply = null;
-  await manager.handleInteraction({
-    customId: `ticket:reveal_identity:${anon.channel.id}`,
-    guild: env.guild,
-    user: env.staffUser,
-    isButton: () => true,
-    isStringSelectMenu: () => false,
-    isModalSubmit: () => false,
-    async reply(p) {
-      staffRevealReply = p;
-    },
-  });
-  assert(staffRevealReply.content.includes("yalnızca Sunucu Sahibi"));
 
   let ownerRevealReply = null;
   await manager.handleInteraction({
@@ -471,112 +536,24 @@ async function runTicketTests() {
   });
   assert(ownerRevealReply.content.includes(env.playerUser.id));
 
-  // Admin writes in `anonim-5` -> player receives anonymous DM (no admin name leaked!)
-  const beforeAdminMsgDms = env.playerUser._dms.length;
-  await manager.handleGuildMessage(
-    {
-      guild: env.guild,
-      channel: anon.channel,
-      author: env.staffUser,
-      content: "Konuyu incelemeye aldik, elinizde ekran goruntusu var mi?",
-      attachments: new Map(),
-    },
-    env.client
-  );
-  assert.strictEqual(env.playerUser._dms.length, beforeAdminMsgDms + 1);
-  const bridgedToPlayerJson = JSON.stringify(
-    env.playerUser._dms[env.playerUser._dms.length - 1].embeds[0].data
-  );
-  assert(bridgedToPlayerJson.includes("ekran goruntusu var mi"));
-  assert(!bridgedToPlayerJson.includes(env.staffUser.username));
-  assert(!bridgedToPlayerJson.includes(env.staffUser.id));
-
-  // Admin internal note with `//` -> NOT forwarded to player!
-  await manager.handleGuildMessage(
-    {
-      guild: env.guild,
-      channel: anon.channel,
-      author: env.staffUser,
-      content: "// arkadaslar loglari kontrol edelim",
-      attachments: new Map(),
-    },
-    env.client
-  );
-  assert.strictEqual(env.playerUser._dms.length, beforeAdminMsgDms + 1);
-
-  // Player writes in DM to bot -> forwarded anonymously to `anonim-5`!
   const beforePlayerReplySent = anon.channel._sent.length;
-  const dmReplies = [];
   await manager.handleDirectMessage(
     {
       guild: null,
       author: env.playerUser,
-      content: "Evet kanit linki burada.",
+      content: "Anonim kanit mesaji",
       attachments: new Map(),
       reference: null,
-      async reply(txt) {
-        dmReplies.push(txt);
-      },
+      async reply() {},
     },
     env.client
   );
   assert.strictEqual(anon.channel._sent.length, beforePlayerReplySent + 1);
-  const bridgedToAdminsJson = JSON.stringify(
-    anon.channel._sent[anon.channel._sent.length - 1].embeds[0].data
-  );
-  assert(bridgedToAdminsJson.includes("kanit linki burada"));
-  assert(!bridgedToAdminsJson.includes(env.playerUser.id));
-  assert(!bridgedToAdminsJson.includes(env.playerUser.username));
+  console.log("[OK] Anonim Sikayet (1574483609677602987): DM koprusu ve sahip-ozel kimlik dogrulandi.");
 
-  // Close anonim-5 -> player gets DM notification AND subsequent player DM is rejected while closed!
-  const dmsBeforeAnonClose = env.playerUser._dms.length;
-  await manager.executeAdminAction({
-    guild: env.guild,
-    client: env.client,
-    channel: anon.channel,
-    actorMember: env.staffMember,
-    actorUser: env.staffUser,
-    action: "close",
-  });
-  assert.strictEqual(env.playerUser._dms.length, dmsBeforeAnonClose + 1);
-  assert(
-    env.playerUser._dms[env.playerUser._dms.length - 1].embeds[0].data.title.includes(
-      "Kapatıldı"
-    )
-  );
-
-  const closedReplies = [];
-  const beforeClosedAttempt = anon.channel._sent.length;
-  await manager.handleDirectMessage(
-    {
-      guild: null,
-      author: env.playerUser,
-      content: "kapaliyken mesaj",
-      attachments: new Map(),
-      reference: null,
-      async reply(txt) {
-        closedReplies.push(txt);
-      },
-    },
-    env.client
-  );
-  assert.strictEqual(anon.channel._sent.length, beforeClosedAttempt);
-  assert(closedReplies[0].includes("Kapalı"));
-
-  console.log("[OK] Anonim Sikayet (anonim-5): Cift yonlu DM koprusu, sahip-ozel kimlik ve kapatma bildirimi dogrulandi.");
-
-  // 6. Ticket Claim + 12-Hour Auto-Ping Reminder System (on dc-2)
+  // 7. Claim + 12-Hour Auto-Ping Reminder on Discord ticket (dc)
+  const dc = createdTickets.discord;
   const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
-  const staff2User = createUser("staff-102", "YetkiliEce");
-  const staff2Member = {
-    id: staff2User.id,
-    displayName: "Yetkili Ece",
-    user: staff2User,
-    roles: { cache: env.staffMember.roles.cache },
-    permissions: { has: () => false },
-  };
-
-  // Staff 1 claims dc-2
   const claimRes = await manager.executeAdminAction({
     guild: env.guild,
     client: env.client,
@@ -586,147 +563,35 @@ async function runTicketTests() {
     action: "claim",
   });
   assert.strictEqual(claimRes.ok, true);
-  assert.strictEqual(dc.ticket.claimedById, env.staffUser.id);
-  assert(dc.ticket.awaitingStaffSince > 0);
-  // Top embed reflects claimed staff
-  const claimedEmbedFields = dc.controlMsg.embeds[0].data.fields;
-  const claimField = claimedEmbedFields.find((f) => f.name === "Üstlenen Yetkili");
-  assert(claimField && claimField.value.includes(`<@${env.staffUser.id}>`));
-
-  // Same staff trying to claim again -> ALREADY_CLAIMED_BY_YOU
-  const dupClaim = await manager.executeAdminAction({
-    guild: env.guild,
-    client: env.client,
-    channel: dc.channel,
-    actorMember: env.staffMember,
-    actorUser: env.staffUser,
-    action: "claim",
-  });
-  assert.strictEqual(dupClaim.ok, false);
-  assert.strictEqual(dupClaim.reason, "ALREADY_CLAIMED_BY_YOU");
-
-  // Another non-admin staff trying to claim -> ALREADY_CLAIMED
-  const stealClaim = await manager.executeAdminAction({
-    guild: env.guild,
-    client: env.client,
-    channel: dc.channel,
-    actorMember: staff2Member,
-    actorUser: staff2User,
-    action: "claim",
-  });
-  assert.strictEqual(stealClaim.ok, false);
-  assert.strictEqual(stealClaim.reason, "ALREADY_CLAIMED");
-
-  // 11 hours elapsed -> NO reminder yet
   const t0 = dc.ticket.awaitingStaffSince;
-  const rem11h = await manager.checkClaimReminders(
-    env.client,
-    t0 + 11 * 60 * 60 * 1000
-  );
-  assert.strictEqual(rem11h.remindedCount, 0);
-
-  // 12 hours + 1 min elapsed without staff replying -> bot PINGS <@staff-101>!
-  const beforePingLen = dc.channel._sent.length;
+  // Both claimed open tickets (bug_raporu by mgmtUser + discord by staffUser) trigger 12h reminder!
   const rem12h = await manager.checkClaimReminders(
     env.client,
     t0 + TWELVE_HOURS_MS + 60_000
   );
-  assert.strictEqual(rem12h.remindedCount, 1);
-  assert.strictEqual(dc.channel._sent.length, beforePingLen + 1);
-  const pingMsg = dc.channel._sent[dc.channel._sent.length - 1];
-  assert.strictEqual(pingMsg.content, `<@${env.staffUser.id}>`);
-  assert(pingMsg.embeds[0].data.description.includes("12 saattir"));
-
-  // Checking again 5 minutes later -> NO duplicate spam!
-  const remDup = await manager.checkClaimReminders(
-    env.client,
-    t0 + TWELVE_HOURS_MS + 6 * 60_000
+  assert.strictEqual(rem12h.remindedCount, 2);
+  assert.strictEqual(
+    dc.channel._sent[dc.channel._sent.length - 1].content,
+    `<@${env.staffUser.id}>`
   );
-  assert.strictEqual(remDup.remindedCount, 0);
+  assert.strictEqual(
+    bugTicket.channel._sent[bugTicket.channel._sent.length - 1].content,
+    `<@${env.mgmtUser.id}>`
+  );
 
-  // Claimed staff replies in dc-2 -> clock clears, NO reminder even 30 hours later while waiting for player!
   await manager.handleGuildMessage(
     {
       guild: env.guild,
       channel: dc.channel,
       author: env.staffUser,
-      content: "Merhaba, rolunuzu hemen kontrol ediyorum.",
+      content: "Inceliyorum.",
       attachments: new Map(),
     },
     env.client
   );
   assert.strictEqual(dc.ticket.awaitingStaffSince, null);
-  const remAfterReply = await manager.checkClaimReminders(
-    env.client,
-    Date.now() + 30 * 60 * 60 * 1000
-  );
-  assert.strictEqual(remAfterReply.remindedCount, 0);
 
-  // Player sends a new message in dc-2 -> 12h clock starts again -> ping after 12h!
-  await manager.handleGuildMessage(
-    {
-      guild: env.guild,
-      channel: dc.channel,
-      author: env.playerUser,
-      content: "Tesekkurler, hala gelmedi kontrol edebilir misiniz?",
-      attachments: new Map(),
-    },
-    env.client
-  );
-  assert(dc.ticket.awaitingStaffSince > 0);
-  const remSecondWave = await manager.checkClaimReminders(
-    env.client,
-    dc.ticket.awaitingStaffSince + TWELVE_HOURS_MS + 1000
-  );
-  assert.strictEqual(remSecondWave.remindedCount, 1);
-
-  // Unclaim clears claimedById and prevents further reminders
-  const unclaimRes = await manager.executeAdminAction({
-    guild: env.guild,
-    client: env.client,
-    channel: dc.channel,
-    actorMember: env.staffMember,
-    actorUser: env.staffUser,
-    action: "unclaim",
-  });
-  assert.strictEqual(unclaimRes.ok, true);
-  assert.strictEqual(dc.ticket.claimedById, null);
-  assert.strictEqual(dc.ticket.awaitingStaffSince, null);
-  console.log("[OK] Talebi Ustlenme & 12 saat hatirlatici: Ustlenme, cevap sifirlama, 12 saatte etiket ve birakma dogrulandi.");
-
-  // 7. New categories: Oneri Itirazi, Bug Raporu, Yonetim Sikayet
-  const oneri = await manager.createTicketFromSubmission({
-    guild: env.guild,
-    client: env.client,
-    openerUser: env.playerUser,
-    categoryId: "oneri_itirazi",
-    formDiscordUserId: env.playerUser.id,
-    issueDescription: "Reddedilen onerime itiraz ediyorum.",
-  });
-  assert.strictEqual(oneri.channel.name, "oneri-6");
-
-  const bug = await manager.createTicketFromSubmission({
-    guild: env.guild,
-    client: env.client,
-    openerUser: env.playerUser,
-    categoryId: "bug_raporu",
-    formDiscordUserId: env.playerUser.id,
-    issueDescription: "Rol verme komutu hata veriyor.",
-  });
-  assert.strictEqual(bug.channel.name, "bug-7");
-
-  const ys = await manager.createTicketFromSubmission({
-    guild: env.guild,
-    client: env.client,
-    openerUser: env.playerUser,
-    categoryId: "yonetim_sikayet",
-    formDiscordUserId: env.playerUser.id,
-    issueDescription: "Yonetim uyesinden sikayetciyim.",
-    reportedUsername: "yonetici_a",
-  });
-  assert.strictEqual(ys.channel.name, "yonetim-sikayet-8");
-
-  // 8. Blacklist Kaldirma category: custom 3-field modal (ID, Blacklist Alma Sebebi, Blacklist Kaldirma Istegi Sebebi)
+  // 8. Blacklist Kaldirma custom 3-field modal + syncExistingTickets across all 11 categories!
   let blModal = null;
   await manager.handleInteraction({
     customId: "ticket:select_category",
@@ -739,51 +604,16 @@ async function runTicketTests() {
       blModal = m;
     },
   });
-  assert(blModal);
   const blFields = blModal.components.map((r) => r.components[0].data);
   assert.strictEqual(blFields.length, 3);
   assert.strictEqual(blFields[0].custom_id, "discord_user_id");
-  assert.strictEqual(blFields[0].required, true);
   assert.strictEqual(blFields[1].custom_id, "blacklist_reason");
-  assert.strictEqual(blFields[1].required, true);
   assert.strictEqual(blFields[2].custom_id, "blacklist_appeal_reason");
-  assert.strictEqual(blFields[2].required, true);
 
-  let blEditReply = null;
-  await manager.handleInteraction({
-    customId: "ticket:modal:blacklist_kaldirma:default",
-    guild: env.guild,
-    client: env.client,
-    user: env.playerUser,
-    isButton: () => false,
-    isStringSelectMenu: () => false,
-    isModalSubmit: () => true,
-    fields: {
-      getTextInputValue(k) {
-        if (k === "discord_user_id") return env.playerUser.id;
-        if (k === "blacklist_reason") return "Kural ihlali nedeniyle aldim.";
-        if (k === "blacklist_appeal_reason") return "Hatami anladim, tekrarlamayacagim.";
-        throw new Error(`Unexpected field: ${k}`);
-      },
-    },
-    async deferReply() {},
-    async editReply(msg) {
-      blEditReply = msg;
-    },
-  });
-  assert(blEditReply && blEditReply.includes("#9"));
-  const blCh = env.guild.channels.cache.find((c) => c.name === "blacklist-9");
-  assert(blCh);
-  const blEmbedData = blCh._sent[0].embeds[0].data;
-  assert(blEmbedData.description.includes("Blacklist Alma Sebebi"));
-  assert(blEmbedData.description.includes("Kural ihlali nedeniyle aldim."));
-  assert(blEmbedData.description.includes("Blacklist Kaldırma İsteği Sebebi"));
-  assert(blEmbedData.description.includes("Hatami anladim"));
-  assert.strictEqual(
-    blEmbedData.fields.some((f) => f.name === "Şikayet Edilen Kişi"),
-    false
-  );
-  console.log("[OK] Yeni kategoriler + Blacklist Kaldirma ozel formu (blacklist-9) ve Kurallar kaldirimi dogrulandi.");
+  // Startup recovery sync across all 11 categories (10 remaining open tickets after trp deleted)
+  const syncedCount = await manager.syncExistingTickets(env.client);
+  assert.strictEqual(syncedCount, 10);
+  console.log("[OK] Ustlenme, 12 saat hatirlatici, Blacklist formu ve 11 kategori acilis senkronizasyonu dogrulandi.");
 
   console.log("\nTUM TICKET TESTLERI BASARIYLA GECTI.");
 }

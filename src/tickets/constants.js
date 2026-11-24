@@ -1,10 +1,13 @@
 const DEFAULT_TICKET_PANEL_CHANNEL_ID = "1573522477655654544";
 
+const DEFAULT_MANAGEMENT_ROLE_ID = "1573521638241345726";
+const DEFAULT_DISCORD_STAFF_ROLE_ID = "1573521880147820594";
+
+const DEFAULT_TICKET_MANAGEMENT_ROLE_IDS = [DEFAULT_MANAGEMENT_ROLE_ID];
+const DEFAULT_TICKET_DISCORD_STAFF_ROLE_IDS = [DEFAULT_DISCORD_STAFF_ROLE_ID];
 const DEFAULT_TICKET_STAFF_ROLE_IDS = [
-  "1573521722697719970",
-  "1573521638241345726",
-  "1573521538479816784",
-  "1573521880147820594",
+  DEFAULT_DISCORD_STAFF_ROLE_ID,
+  DEFAULT_MANAGEMENT_ROLE_ID,
 ];
 
 const PANEL_TITLE = "🎫 THE COMPLEX Destek Merkezi";
@@ -20,7 +23,6 @@ const PANEL_DESCRIPTION = [
   "**Kategoriler**",
   "🎭 Text RP · Text RP içindeki sorunlar, oyuncu şikayetleri ve RP kuralları",
   "💬 Discord · Discord sunucusu: rol, kanal erişimi ve diğer Discord konuları",
-  "🛠️ Teknik Destek · Bot hataları, yetki/rol sorunları ve diğer teknik sorunlar",
   "❓ Sorunum Var · Diğer kategorilere girmeyen her türlü sorun ve soru",
   "🔓 Perma Yasak Kaldırma · Kalıcı yasağınızın kaldırılması için başvuru",
   "📨 Yönetim İletişim · Yönetime doğrudan ulaş: öneri, iş birliği ve özel konular. Yalnız yönetim ve üst yönetim görür",
@@ -33,7 +35,11 @@ const PANEL_DESCRIPTION = [
 ].join("\n");
 
 /**
- * All 12 ticket categories with exact channel prefixes & access tiers.
+ * All 11 ticket categories with exact Discord parent category IDs,
+ * channel prefixes, and strict access tiers:
+ * - "staff": Discord Staff (1573521880147820594) + Yönetim (1573521638241345726)
+ * - "management": ONLY Yönetim (1573521638241345726) (Discord Staff explicitly denied)
+ * - "anonymous": ONLY Yönetim / selected visibility (opener communicates via DM)
  */
 const TICKET_CATEGORIES = {
   text_rp: {
@@ -41,6 +47,7 @@ const TICKET_CATEGORIES = {
     label: "Text RP",
     description: "Text RP içindeki sorunlar, oyuncu şikayetleri ve RP kuralları",
     channelPrefix: "trp",
+    parentCategoryId: "1574482182020403210",
     accessTier: "staff",
     anonymous: false,
   },
@@ -49,14 +56,7 @@ const TICKET_CATEGORIES = {
     label: "Discord",
     description: "Discord sunucusu: rol, kanal erişimi ve diğer Discord konuları",
     channelPrefix: "dc",
-    accessTier: "staff",
-    anonymous: false,
-  },
-  teknik: {
-    id: "teknik",
-    label: "Teknik Destek",
-    description: "Bot hataları, yetki/rol sorunları ve diğer teknik sorunlar",
-    channelPrefix: "teknik",
+    parentCategoryId: "1574482318737801216",
     accessTier: "staff",
     anonymous: false,
   },
@@ -65,46 +65,7 @@ const TICKET_CATEGORIES = {
     label: "Sorunum Var",
     description: "Diğer kategorilere girmeyen her türlü sorun ve soru",
     channelPrefix: "sorun",
-    accessTier: "staff",
-    anonymous: false,
-  },
-  perma_ban: {
-    id: "perma_ban",
-    label: "Perma Yasak Kaldırma",
-    description: "Kalıcı yasağınızın kaldırılması için başvuru",
-    channelPrefix: "perma",
-    accessTier: "staff",
-    anonymous: false,
-  },
-  yonetim: {
-    id: "yonetim",
-    label: "Yönetim İletişim",
-    description: "Öneri, iş birliği ve özel konular (Yalnız yönetim ve üst yönetim)",
-    channelPrefix: "yonetim",
-    accessTier: "management",
-    anonymous: false,
-  },
-  yetkili_sikayet: {
-    id: "yetkili_sikayet",
-    label: "Normal Yetkili Şikayet",
-    description: "Bir yetkiliyi adınla şikayet et (Yalnız yönetim ve üst yönetim)",
-    channelPrefix: "staff",
-    accessTier: "management",
-    anonymous: false,
-  },
-  anonim_sikayet: {
-    id: "anonim_sikayet",
-    label: "Anonim Şikayet",
-    description: "Yönetim üyesi şikayeti (DM üzerinden anonim iletişim)",
-    channelPrefix: "anonim",
-    accessTier: "anonymous",
-    anonymous: true,
-  },
-  oneri_itirazi: {
-    id: "oneri_itirazi",
-    label: "Öneri İtirazı",
-    description: "Askıya alınmış veya reddedilmiş öneriniz hakkında itiraz talebi",
-    channelPrefix: "oneri",
+    parentCategoryId: "1574482768346357790",
     accessTier: "staff",
     anonymous: false,
   },
@@ -113,7 +74,53 @@ const TICKET_CATEGORIES = {
     label: "Bug Raporu",
     description: "Discord içi bir bug tespit ederseniz bu kategoriden bildirin",
     channelPrefix: "bug",
-    accessTier: "staff",
+    parentCategoryId: "1574482604936134807",
+    accessTier: "management",
+    anonymous: false,
+  },
+  perma_ban: {
+    id: "perma_ban",
+    label: "Perma Yasak Kaldırma",
+    description: "Kalıcı yasağınızın kaldırılması için başvuru (Yalnız yönetim görür)",
+    channelPrefix: "perma",
+    parentCategoryId: "1574482908746616893",
+    accessTier: "management",
+    anonymous: false,
+  },
+  yonetim: {
+    id: "yonetim",
+    label: "Yönetim İletişim",
+    description: "Öneri, iş birliği ve özel konular (Yalnız yönetim ve üst yönetim)",
+    channelPrefix: "yonetim",
+    parentCategoryId: "1574483052590006413",
+    accessTier: "management",
+    anonymous: false,
+  },
+  yetkili_sikayet: {
+    id: "yetkili_sikayet",
+    label: "Normal Yetkili Şikayet",
+    description: "Bir yetkiliyi adınla şikayet et (Yalnız yönetim ve üst yönetim)",
+    channelPrefix: "staff",
+    parentCategoryId: "1574483508166922321",
+    accessTier: "management",
+    anonymous: false,
+  },
+  anonim_sikayet: {
+    id: "anonim_sikayet",
+    label: "Anonim Şikayet",
+    description: "Yönetim üyesi şikayeti (DM üzerinden anonim iletişim)",
+    channelPrefix: "anonim",
+    parentCategoryId: "1574483609677602987",
+    accessTier: "anonymous",
+    anonymous: true,
+  },
+  oneri_itirazi: {
+    id: "oneri_itirazi",
+    label: "Öneri İtirazı",
+    description: "Askıya alınmış veya reddedilmiş öneriniz hakkında itiraz talebi",
+    channelPrefix: "oneri",
+    parentCategoryId: "1574483714837053530",
+    accessTier: "management",
     anonymous: false,
   },
   yonetim_sikayet: {
@@ -121,6 +128,7 @@ const TICKET_CATEGORIES = {
     label: "Yönetim Şikayet",
     description: "Herhangi bir yönetim üyesinden şikayetçi iseniz bu kategoriden açın",
     channelPrefix: "yonetim-sikayet",
+    parentCategoryId: "1574483976624541697",
     accessTier: "management",
     anonymous: false,
   },
@@ -129,11 +137,20 @@ const TICKET_CATEGORIES = {
     label: "Blacklist Kaldırma",
     description: "Blacklist cezanızın kaldırılması için başvuru talebi",
     channelPrefix: "blacklist",
-    accessTier: "staff",
+    parentCategoryId: "1574484077069738174",
+    accessTier: "management",
     anonymous: false,
     customForm: "blacklist",
   },
 };
+
+const ALL_TICKET_PARENT_CATEGORY_IDS = [
+  ...new Set(
+    Object.values(TICKET_CATEGORIES)
+      .map((c) => c.parentCategoryId)
+      .filter(Boolean)
+  ),
+];
 
 const ANONYMOUS_VISIBILITY_OPTIONS = {
   management_all: {
@@ -212,7 +229,12 @@ const ADMIN_MENU_ACTIONS = [
 
 module.exports = {
   DEFAULT_TICKET_PANEL_CHANNEL_ID,
+  DEFAULT_MANAGEMENT_ROLE_ID,
+  DEFAULT_DISCORD_STAFF_ROLE_ID,
+  DEFAULT_TICKET_MANAGEMENT_ROLE_IDS,
+  DEFAULT_TICKET_DISCORD_STAFF_ROLE_IDS,
   DEFAULT_TICKET_STAFF_ROLE_IDS,
+  ALL_TICKET_PARENT_CATEGORY_IDS,
   PANEL_TITLE,
   PANEL_DESCRIPTION,
   TICKET_CATEGORIES,

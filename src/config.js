@@ -1,7 +1,8 @@
 require("dotenv").config();
 const {
   DEFAULT_TICKET_PANEL_CHANNEL_ID,
-  DEFAULT_TICKET_STAFF_ROLE_IDS,
+  DEFAULT_TICKET_MANAGEMENT_ROLE_IDS,
+  DEFAULT_TICKET_DISCORD_STAFF_ROLE_IDS,
 } = require("./tickets/constants");
 const { DEFAULT_BLACKLIST_ROLE_ID } = require("./defender/constants");
 
@@ -19,10 +20,19 @@ function parseRoleIds(raw, fallback = []) {
   return ids.length > 0 ? [...new Set(ids)] : [...fallback];
 }
 
-const ticketStaffRoleIds = parseRoleIds(
-  process.env.TICKET_STAFF_ROLE_IDS,
-  DEFAULT_TICKET_STAFF_ROLE_IDS
+const ticketManagementRoleIds = parseRoleIds(
+  process.env.TICKET_MANAGEMENT_ROLE_IDS,
+  DEFAULT_TICKET_MANAGEMENT_ROLE_IDS
 );
+
+const ticketDiscordStaffRoleIds = parseRoleIds(
+  process.env.TICKET_DISCORD_STAFF_ROLE_IDS,
+  DEFAULT_TICKET_DISCORD_STAFF_ROLE_IDS
+);
+
+const ticketStaffRoleIds = [
+  ...new Set([...ticketDiscordStaffRoleIds, ...ticketManagementRoleIds]),
+];
 
 const config = {
   token: process.env.DISCORD_TOKEN || "",
@@ -49,11 +59,9 @@ const config = {
   ticketCategoryName: (
     process.env.TICKET_CATEGORY_NAME || "DESTEK TALEPLERİ"
   ).trim(),
+  ticketManagementRoleIds,
+  ticketDiscordStaffRoleIds,
   ticketStaffRoleIds,
-  ticketManagementRoleIds: parseRoleIds(
-    process.env.TICKET_MANAGEMENT_ROLE_IDS,
-    ticketStaffRoleIds
-  ),
   ticketUpperManagementRoleIds: parseRoleIds(
     process.env.TICKET_UPPER_MANAGEMENT_ROLE_IDS,
     []

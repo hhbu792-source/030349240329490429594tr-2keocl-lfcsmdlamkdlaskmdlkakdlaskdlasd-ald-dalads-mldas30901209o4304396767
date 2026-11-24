@@ -58,21 +58,23 @@ Sunucu koruma (Guard) odaklı, çok katmanlı **Defender Sistemi**.
 ## THE COMPLEX Destek Merkezi (Ticket Sistemi)
 
 - **Destek Aç Panel Kanalı:** `1573522477655654544` (bot açıldığında paneli otomatik gönderir/günceller, `/ticket panel` ile de manuel yenilenebilir).
-- **12 Kategori + Özel Kanal Şablonları:**
-  - `Text RP` -> `trp-<numara>`
-  - `Discord` -> `dc-<numara>`
-  - `Teknik Destek` -> `teknik-<numara>`
-  - `Sorunum Var` -> `sorun-<numara>`
-  - `Perma Yasak Kaldırma` -> `perma-<numara>`
-  - `Yönetim İletişim` -> `yonetim-<numara>`
-  - `Normal Yetkili Şikayet` -> `staff-<numara>`
-  - `Anonim Şikayet` -> `anonim-<numara>` (görünürlük seçimi + çift yönlü DM köprüsü)
-  - `Öneri İtirazı` -> `oneri-<numara>`
-  - `Bug Raporu` -> `bug-<numara>`
-  - `Yönetim Şikayet` -> `yonetim-sikayet-<numara>`
-  - `Blacklist Kaldırma` -> `blacklist-<numara>` (özel form: Discord User ID, Blacklist Alma Sebebi, Blacklist Kaldırma İsteği Sebebi)
+- **11 Kategori + Özel Discord Kategori ID'leri & Kanal Şablonları:**
+  - **Discord Staff (`1573521880147820594`) + Yönetim (`1573521638241345726`) Görecekleri:**
+    - `Text RP` -> `trp-<numara>` (Kategori ID: `1574482182020403210`)
+    - `Discord` -> `dc-<numara>` (Kategori ID: `1574482318737801216`)
+    - `Sorunum Var` -> `sorun-<numara>` (Kategori ID: `1574482768346357790`)
+  - **Sadece Yönetim (`1573521638241345726`) Görecekleri (Discord Staff erişimi kapalı):**
+    - `Bug Raporu` -> `bug-<numara>` (Kategori ID: `1574482604936134807`)
+    - `Perma Yasak Kaldırma` -> `perma-<numara>` (Kategori ID: `1574482908746616893`)
+    - `Yönetim İletişim` -> `yonetim-<numara>` (Kategori ID: `1574483052590006413`)
+    - `Normal Yetkili Şikayet` -> `staff-<numara>` (Kategori ID: `1574483508166922321`)
+    - `Anonim Şikayet` -> `anonim-<numara>` (Kategori ID: `1574483609677602987`, görünürlük seçimi + çift yönlü DM köprüsü)
+    - `Öneri İtirazı` -> `oneri-<numara>` (Kategori ID: `1574483714837053530`)
+    - `Yönetim Şikayet` -> `yonetim-sikayet-<numara>` (Kategori ID: `1574483976624541697`)
+    - `Blacklist Kaldırma` -> `blacklist-<numara>` (Kategori ID: `1574484077069738174`, özel form: Discord User ID, Blacklist Alma Sebebi, Blacklist Kaldırma İsteği Sebebi)
+- **Kullanıcı Gizliliği:** Tüm 11 kategori `@everyone` için gizlidir; her kullanıcı yalnızca kendi açık talebinin bulunduğu kategoriyi ve yalnızca kendi talebini görür.
 - **3 Alanlı Form:** Discord User ID (zorunlu), Sorun/Talep (zorunlu), Şikayet Edilen Kişi Kullanıcı Adı (opsiyonel).
-- **Erişim Rolleri:** `1573521722697719970`, `1573521638241345726`, `1573521538479816784`, `1573521880147820594`.
+- **Erişim Rolleri:** Yönetim (`1573521638241345726`), Discord Staff (`1573521880147820594`).
 - **Kanal Üstü Sabit Yönetim Menüsü:** Talebi Üstlen (12 saat içinde cevap vermezse bot otomatik etiketler), Üstlenmeyi Bırak, Yönetime Aktar, Kapat, Askıya Al, Geri Aç, Çözüldü İşaretle, Sil (+ kullanıcıya DM bildirimi).
 
 | Ticket Komutu | Açıklama |

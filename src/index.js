@@ -32,8 +32,9 @@ const defender = new DefenderEngine({
 const ticketManager = new TicketManager({
   panelChannelId: config.ticketPanelChannelId,
   ticketCategoryName: config.ticketCategoryName,
-  staffRoleIds: config.ticketStaffRoleIds,
   managementRoleIds: config.ticketManagementRoleIds,
+  discordStaffRoleIds: config.ticketDiscordStaffRoleIds,
+  staffRoleIds: config.ticketStaffRoleIds,
   upperManagementRoleIds: config.ticketUpperManagementRoleIds,
   claimReminderMs: config.ticketClaimReminderMs,
   snapshotManager: defender.snapshotManager,
@@ -110,6 +111,12 @@ client.once(Events.ClientReady, async (readyClient) => {
     if (panelMsg) {
       console.log(
         `[TICKET] Destek Merkezi paneli hazir (kanal: ${config.ticketPanelChannelId}, mesaj: ${panelMsg.id}).`
+      );
+    }
+    const configuredCats = await ticketManager.syncCategoryPermissions(readyClient);
+    if (configuredCats > 0) {
+      console.log(
+        `[TICKET] ${configuredCats} destek kategorisinin gizlilik ve rol izinleri senkronize edildi.`
       );
     }
     const syncedTickets = await ticketManager.syncExistingTickets(readyClient);

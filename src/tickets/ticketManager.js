@@ -14,7 +14,9 @@ const {
 
 const {
   DEFAULT_TICKET_PANEL_CHANNEL_ID,
-  DEFAULT_TICKET_STAFF_ROLE_IDS,
+  DEFAULT_TICKET_MANAGEMENT_ROLE_IDS,
+  DEFAULT_TICKET_DISCORD_STAFF_ROLE_IDS,
+  ALL_TICKET_PARENT_CATEGORY_IDS,
   PANEL_TITLE,
   PANEL_DESCRIPTION,
   TICKET_CATEGORIES,
@@ -41,14 +43,18 @@ class TicketManager {
     this.panelChannelId =
       options.panelChannelId || DEFAULT_TICKET_PANEL_CHANNEL_ID;
     this.ticketCategoryName = options.ticketCategoryName || "DESTEK TALEPLERİ";
-    this.staffRoleIds =
-      options.staffRoleIds && options.staffRoleIds.length > 0
-        ? [...options.staffRoleIds]
-        : [...DEFAULT_TICKET_STAFF_ROLE_IDS];
     this.managementRoleIds =
       options.managementRoleIds && options.managementRoleIds.length > 0
         ? [...options.managementRoleIds]
-        : [...this.staffRoleIds];
+        : [...DEFAULT_TICKET_MANAGEMENT_ROLE_IDS];
+    this.discordStaffRoleIds =
+      options.discordStaffRoleIds && options.discordStaffRoleIds.length > 0
+        ? [...options.discordStaffRoleIds]
+        : [...DEFAULT_TICKET_DISCORD_STAFF_ROLE_IDS];
+    this.staffRoleIds =
+      options.staffRoleIds && options.staffRoleIds.length > 0
+        ? [...options.staffRoleIds]
+        : [...new Set([...this.discordStaffRoleIds, ...this.managementRoleIds])];
     this.upperManagementRoleIds =
       options.upperManagementRoleIds && options.upperManagementRoleIds.length > 0
         ? [...options.upperManagementRoleIds]
@@ -76,31 +82,55 @@ class TicketManager {
     return false;
   }
 
-  isStaffMember(guild, member, permissions) {
-    if (!guild) return false;
-    const userId = member?.id || member?.user?.id;
-    if (userId && guild.ownerId === userId) return true;
-    if (permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
-    if (member?.permissions?.has?.(PermissionFlagsBits.Administrator)) {
-      return true;
-    }
-
-    const allowedRoles = new Set([
-      ...this.staffRoleIds,
-      ...this.managementRoleIds,
-      ...this.upperManagementRoleIds,
-    ]);
-
-    if (member?.roles?.cache) {
-      for (const rid of allowedRoles) {
+  _memberHasAnyRole(member, roleIdList) {
+    if (!member || !roleIdList || roleIdList.length === 0) return false;
+    if (member.roles?.cache) {
+      for (const rid of roleIdList) {
         if (member.roles.cache.has(rid)) return true;
       }
-    } else if (Array.isArray(member?.roles)) {
-      for (const rid of allowedRoles) {
+    } else if (Array.isArray(member.roles)) {
+      for (const rid of roleIdList) {
         if (member.roles.includes(rid)) return true;
       }
     }
     return false;
+  }
+
+  isManagementMember(guild, member, permissions) {
+    if (this.isAdminMember(guild, member, permissions)) return true;
+    const mgmtRoles = [
+      ...new Set([...this.managementRoleIds, ...this.upperManagementRoleIds]),
+    ];
+    return this._memberHasAnyRole(member, mgmtRoles);
+  }
+
+  isStaffMember(guild, member, permissions) {
+    if (this.isAdminMember(guild, member, permissions)) return true;
+    const allowedRoles = [
+      ...new Set([
+        ...this.discordStaffRoleIds,
+        ...this.staffRoleIds,
+        ...this.managementRoleIds,
+        ...this.upperManagementRoleIds,
+      ]),
+    ];
+    return this._memberHasAnyRole(member, allowedRoles);
+  }
+
+  canManageTicket(guild, member, permissions, ticket) {
+    if (this.isAdminMember(guild, member, permissions)) return true;
+    if (!ticket) return this.isStaffMember(guild, member, permissions);
+    const cat = TICKET_CATEGORIES[ticket.categoryId];
+    const managementOnly = Boolean(
+      ticket.escalated ||
+        ticket.anonymous ||
+        cat?.accessTier === "management" ||
+        cat?.accessTier === "anonymous"
+    );
+    if (managementOnly) {
+      return this.isManagementMember(guild, member, permissions);
+    }
+    return this.isStaffMember(guild, member, permissions);
   }
 
   buildPanelPayload() {
@@ -405,6 +435,130 @@ class TicketManager {
     return rows;
   }
 
+  _buildCategoryOverwrites(guild, category) {
+    const overwrites = [];
+
+    // Hide every ticket category from @everyone by default.
+    // In Discord, a user automatically sees ONLY the category(ies) that contain
+    // a ticket channel where that specific user has ViewChannel allowed!
+    if (guild.roles?.everyone?.id) {
+      overwrites.push({
+        id: guild.roles.everyone.id,
+        deny: [PermissionFlagsBits.ViewChannel],
+      });
+    }
+
+    const botId = guild.members?.me?.id || guild.client?.user?.id;
+    if (botId) {
+      overwrites.push({
+        id: botId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.ManageMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.EmbedLinks,
+        ],
+      });
+    }
+
+    const seen = new Set(overwrites.map((o) => o.id));
+    const mgmtSet = new Set([
+      ...this.managementRoleIds,
+      ...this.upperManagementRoleIds,
+    ]);
+
+    // Management role (1573521638241345726) can view all ticket categories
+    for (const rid of mgmtSet) {
+      if (!rid || seen.has(rid)) continue;
+      if (guild.roles?.cache && !guild.roles.cache.has(rid)) continue;
+      seen.add(rid);
+      overwrites.push({
+        id: rid,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      });
+    }
+
+    // Discord Staff (1573521880147820594):
+    // Allowed ONLY on staff-tier categories (Text RP, Discord, Sorunum Var);
+    // explicitly denied on all 8 management/anonymous categories!
+    const isStaffTier = category?.accessTier === "staff";
+    for (const rid of this.discordStaffRoleIds) {
+      if (!rid || seen.has(rid)) continue;
+      if (guild.roles?.cache && !guild.roles.cache.has(rid)) continue;
+      seen.add(rid);
+      if (isStaffTier) {
+        overwrites.push({
+          id: rid,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.ReadMessageHistory,
+          ],
+        });
+      } else {
+        overwrites.push({
+          id: rid,
+          deny: [PermissionFlagsBits.ViewChannel],
+        });
+      }
+    }
+
+    return overwrites;
+  }
+
+  async _syncCategoryPermissions(guild, categoryChannel, category) {
+    if (!guild || !categoryChannel?.permissionOverwrites?.set) return false;
+    const overwrites = this._buildCategoryOverwrites(guild, category);
+    this.snapshotManager?.markSelfAction(
+      `channelUpdate:${categoryChannel.id}`,
+      10_000
+    );
+    return categoryChannel.permissionOverwrites
+      .set(overwrites, `Destek kategorisi erisim ayarlari (${category.label})`)
+      .then(() => true)
+      .catch(() => false);
+  }
+
+  async syncCategoryPermissions(client) {
+    let configured = 0;
+    for (const guild of client.guilds.cache.values()) {
+      for (const cat of Object.values(TICKET_CATEGORIES)) {
+        if (!cat.parentCategoryId) continue;
+        let catCh = guild.channels.cache.get(cat.parentCategoryId) || null;
+        if (!catCh && typeof guild.channels.fetch === "function") {
+          catCh = await guild.channels
+            .fetch(cat.parentCategoryId)
+            .catch(() => null);
+        }
+        if (!catCh || catCh.type !== ChannelType.GuildCategory) continue;
+        const ok = await this._syncCategoryPermissions(guild, catCh, cat);
+        if (ok) configured += 1;
+      }
+    }
+    return configured;
+  }
+
+  async _resolveParentCategory(guild, category) {
+    if (category?.parentCategoryId) {
+      let existing =
+        guild.channels.cache.get(category.parentCategoryId) || null;
+      if (!existing && typeof guild.channels.fetch === "function") {
+        existing = await guild.channels
+          .fetch(category.parentCategoryId)
+          .catch(() => null);
+      }
+      if (existing && existing.type === ChannelType.GuildCategory) {
+        return existing;
+      }
+    }
+    return this._ensureTicketCategory(guild);
+  }
+
   async _ensureTicketCategory(guild) {
     const target = this.ticketCategoryName.toLowerCase();
     const existing = guild.channels.cache.find(
@@ -464,18 +618,22 @@ class TicketManager {
     ];
 
     let roleIdsToGrant = [];
+    let roleIdsToDeny = [];
 
     if (category.anonymous) {
       // Opener NEVER gets channel access to anonim-numara
+      roleIdsToDeny = [...this.discordStaffRoleIds];
       if (visibility === "owner_only") {
         roleIdsToGrant = [];
+        roleIdsToDeny.push(...this.managementRoleIds);
       } else if (visibility === "upper_only") {
-        roleIdsToGrant = this.upperManagementRoleIds;
+        roleIdsToGrant = [...this.upperManagementRoleIds];
+        roleIdsToDeny.push(...this.managementRoleIds);
       } else {
-        roleIdsToGrant = this.managementRoleIds;
+        roleIdsToGrant = [...this.managementRoleIds];
       }
     } else {
-      // Standard ticket: opener sees the channel
+      // Standard ticket: ONLY the opener (and authorized staff/management) can see this channel
       overwrites.push({
         id: openerId,
         allow: [
@@ -487,18 +645,14 @@ class TicketManager {
         ],
       });
 
-      if (escalated) {
-        // When escalated: if distinct management roles exist, keep only them; otherwise admin-only
-        const isDistinctManagement =
-          this.managementRoleIds.length < this.staffRoleIds.length ||
-          this.managementRoleIds.some((r) => !this.staffRoleIds.includes(r));
-        roleIdsToGrant = isDistinctManagement
-          ? this.managementRoleIds
-          : this.upperManagementRoleIds;
-      } else if (category.accessTier === "management") {
-        roleIdsToGrant = this.managementRoleIds;
+      if (escalated || category.accessTier === "management") {
+        roleIdsToGrant = [...this.managementRoleIds];
+        roleIdsToDeny = [...this.discordStaffRoleIds];
       } else {
-        roleIdsToGrant = this.staffRoleIds;
+        roleIdsToGrant = [
+          ...this.discordStaffRoleIds,
+          ...this.managementRoleIds,
+        ];
       }
     }
 
@@ -510,6 +664,16 @@ class TicketManager {
       overwrites.push({
         id: rid,
         allow: staffAllow,
+      });
+    }
+
+    for (const rid of roleIdsToDeny) {
+      if (!rid || seen.has(rid)) continue;
+      if (guild.roles?.cache && !guild.roles.cache.has(rid)) continue;
+      seen.add(rid);
+      overwrites.push({
+        id: rid,
+        deny: [PermissionFlagsBits.ViewChannel],
       });
     }
 
@@ -601,7 +765,7 @@ class TicketManager {
     }
 
     const ticketNumber = this.store.nextTicketNumber(guild.id);
-    const parentCategory = await this._ensureTicketCategory(guild);
+    const parentCategory = await this._resolveParentCategory(guild, category);
     const channelName = `${category.channelPrefix}-${ticketNumber}`;
     const visibility = category.anonymous
       ? visibilityId || "management_all"
@@ -1195,15 +1359,20 @@ class TicketManager {
       interaction.isStringSelectMenu() &&
       cid.startsWith("ticket:admin_action:")
     ) {
+      const activeTicket = this.store.getTicketByChannel(
+        interaction.guild.id,
+        interaction.channel.id
+      );
       if (
-        !this.isStaffMember(
+        !this.canManageTicket(
           interaction.guild,
           interaction.member,
-          interaction.memberPermissions
+          interaction.memberPermissions,
+          activeTicket
         )
       ) {
         await interaction.reply({
-          content: "Bu yönetim menüsünü yalnızca yetkili ekip kullanabilir.",
+          content: "Bu yönetim menüsünü yalnızca bu talebe yetkili ekip kullanabilir.",
           flags: MessageFlags.Ephemeral,
         });
         return true;
@@ -1565,18 +1734,23 @@ class TicketManager {
     }
 
     for (const guild of client.guilds.cache.values()) {
+      const parentCatIds = new Set(ALL_TICKET_PARENT_CATEGORY_IDS);
       const targetCatName = this.ticketCategoryName.toLowerCase();
-      const parentCat = guild.channels.cache.find(
+      const legacyCat = guild.channels.cache.find(
         (ch) =>
           ch.type === ChannelType.GuildCategory &&
           ch.name.trim().toLowerCase() === targetCatName
       );
-      if (!parentCat) continue;
+      if (legacyCat) parentCatIds.add(legacyCat.id);
 
       const g = this.store.getGuild(guild.id);
       const children = [...guild.channels.cache.values()].filter(
-        (ch) => ch.type === ChannelType.GuildText && ch.parentId === parentCat.id
+        (ch) =>
+          ch.type === ChannelType.GuildText &&
+          ch.parentId &&
+          parentCatIds.has(ch.parentId)
       );
+      if (children.length === 0) continue;
 
       for (const ch of children) {
         const topicMatch = String(ch.topic || "").match(/\[TICKET:#(\d+)\]/);
